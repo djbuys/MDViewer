@@ -1,0 +1,438 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:path/path.dart' as p;
+
+import '../platform/file_saving.dart';
+
+import 'renderer_bridge.dart';
+import 'renderer_controller.dart';
+
+typedef JsEvaluator = Future<Object?> Function(String source);
+
+/// Hosts the bundled JS renderer in a WebView. Only one view should be
+/// mounted per controller; keep it mounted for the app's lifetime.
+class WebViewRendererController implements RendererController {
+  WebViewRendererController({
+    TargetPlatform? platform,
+    this.readyTimeout = const Duration(seconds: 15),
+    this.printDialogTimeout = const Duration(minutes: 30),
+  }) : _platform = platform ?? defaultTargetPlatform;
+
+  final TargetPlatform _platform;
+  final Duration readyTimeout;
+
+  /// How long [print] waits for the print dialog to be dismissed.
+  final Duration printDialogTimeout;
+
+  final ValueNotifier<RendererStatus> _status = ValueNotifier(RendererStatus.loading);
+  final _headings = StreamController<List<Heading>>.broadcast();
+  final _links = StreamController<String>.broadcast();
+  final _finds = StreamController<FindResult>.broadcast();
+  final _rendered = StreamController<void>.broadcast();
+  final _errors = StreamController<String>.broadcast();
+
+  InAppWebViewController? _web;
+  JsEvaluator? _evaluate;
+  final RendererNavigationPolicy _policy = RendererNavigationPolicy();
+  ResourceResolver? _resolver;
+  Timer? _readyTimer;
+  String? _reason;
+  ({String markdown, RenderOptions options})? _pending;
+
+  /// The most recent render (without its scroll restore), replayed when the
+  /// page reloads.
+  ({String markdown, RenderOptions options})? _last;
+
+  @override
+  ValueListenable<RendererStatus> get status => _status;
+  @override
+  String? get unavailableReason => _reason;
+  @override
+  Stream<List<Heading>> get headings => _headings.stream;
+  @override
+  Stream<String> get linkClicks => _links.stream;
+  @override
+  Stream<FindResult> get findResults => _finds.stream;
+  @override
+  Stream<void> get rendered => _rendered.stream;
+  @override
+  Stream<String> get renderErrors => _errors.stream;
+  @override
+  set resourceResolver(ResourceResolver? resolver) => _resolver = resolver;
+  @override
+  bool get canPrint => printModeFor(_platform) != PrintMode.unsupported;
+  @override
+  bool get canSavePdf => savePdfSupported(_platform);
+
+  @override
+  Widget buildView(BuildContext context) => _RendererView(controller: this);
+
+  void startReadyTimer() {
+    _readyTimer?.cancel();
+    _readyTimer = Timer(readyTimeout, () {
+      if (_status.value == RendererStatus.loading) markUnavailable();
+    });
+  }
+
+  void markUnavailable() {
+    _readyTimer?.cancel();
+    _reason = unavailableReasonFor(_platform);
+    _status.value = RendererStatus.unavailable;
+  }
+
+  /// Evaluates JavaScript in the renderer page. Integration tests only.
+  @visibleForTesting
+  Future<Object?> debugEvaluate(String source) async => _evaluate?.call(source);
+
+  /// Runs the page-loaded logic against [evaluate] instead of a live WebView.
+  @visibleForTesting
+  Future<void> debugHandlePageLoaded(JsEvaluator evaluate) {
+    _evaluate = evaluate;
+    return _onPageLoaded();
+  }
+
+  /// Runs the load-stop logic for [url] against [evaluate] and
+  /// [reloadRenderer] instead of a live WebView.
+  @visibleForTesting
+  Future<void> debugHandleLoadStop(
+    Uri? url, {
+    required JsEvaluator evaluate,
+    required Future<void> Function() reloadRenderer,
+  }) {
+    _evaluate = evaluate;
+    return _handleLoadStop(url, reloadRenderer);
+  }
+
+  /// Handler calls are served only for the renderer page's main frame.
+  bool _acceptsCall(JavaScriptHandlerFunctionData data) =>
+      _policy.acceptsHandlerCall(isMainFrame: data.isMainFrame, requestUrl: data.requestUrl);
+
+  void _attach(InAppWebViewController web) {
+    _web = web;
+    _evaluate = (source) => web.evaluateJavascript(source: source);
+    web.addJavaScriptHandler(
+      handlerName: 'headingsChanged',
+      callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
+        final list = data.args.isEmpty ? const <Object?>[] : data.args.first as List<Object?>;
+        _headings.add([for (final item in list) Heading.fromJson(item! as Map<dynamic, dynamic>)]);
+        return null;
+      },
+    );
+    web.addJavaScriptHandler(
+      handlerName: 'linkClicked',
+      callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
+        _links.add((data.args.first as Map<dynamic, dynamic>)['href'] as String);
+        return null;
+      },
+    );
+    web.addJavaScriptHandler(
+      handlerName: 'findResult',
+      callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
+        _finds.add(FindResult.fromJson(data.args.first as Map<dynamic, dynamic>));
+        return null;
+      },
+    );
+    web.addJavaScriptHandler(
+      handlerName: 'rendered',
+      callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
+        _rendered.add(null);
+        return null;
+      },
+    );
+    web.addJavaScriptHandler(
+      handlerName: 'renderError',
+      callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
+        _errors.add((data.args.first as Map<dynamic, dynamic>)['message'] as String);
+        return null;
+      },
+    );
+    web.addJavaScriptHandler(
+      handlerName: 'resolveResource',
+      callback: (JavaScriptHandlerFunctionData data) async {
+        if (!_acceptsCall(data)) return null;
+        final path = (data.args.first as Map<dynamic, dynamic>)['path'] as String;
+        return await _resolver?.call(path);
+      },
+    );
+  }
+
+  Future<void> _onLoadStop(InAppWebViewController web, Uri? url) =>
+      _handleLoadStop(url, () => web.loadFile(assetFilePath: rendererAssetPath));
+
+  /// Consecutive foreign page loads replaced without the renderer page
+  /// loading in between; guards against a reload loop.
+  int _recoveries = 0;
+  static const _maxRecoveries = 3;
+
+  Future<void> _handleLoadStop(Uri? url, Future<void> Function() reloadRenderer) async {
+    if (url != null && !_policy.allowNavigation(url)) {
+      await _recoverFromForeignPage(reloadRenderer);
+      return;
+    }
+    _recoveries = 0;
+    await _onPageLoaded();
+  }
+
+  /// Some other main-frame page finished loading (navigation is cancelled
+  /// for everything but the renderer page, so this should never happen).
+  /// Put the renderer page back; the normal ready path then replays the last
+  /// render. Nothing is evaluated in the foreign page.
+  Future<void> _recoverFromForeignPage(Future<void> Function() reloadRenderer) async {
+    if (_status.value == RendererStatus.unavailable) return;
+    if (++_recoveries > _maxRecoveries) {
+      markUnavailable();
+      return;
+    }
+    if (_status.value == RendererStatus.ready) {
+      _status.value = RendererStatus.loading;
+      _pending ??= _last;
+    }
+    startReadyTimer();
+    try {
+      await reloadRenderer();
+    } catch (e) {
+      debugPrint('Could not reload the renderer page: $e');
+      markUnavailable();
+    }
+  }
+
+  Future<void> _onPageLoaded() async {
+    final evaluate = _evaluate;
+    if (evaluate == null || _status.value == RendererStatus.unavailable) return;
+    Object? hasApi;
+    try {
+      hasApi = await evaluate("typeof window.mdv === 'object'");
+    } catch (_) {
+      hasApi = false;
+    }
+    if (hasApi != true) {
+      markUnavailable();
+      return;
+    }
+    if (_status.value == RendererStatus.loading) {
+      _readyTimer?.cancel();
+      _status.value = RendererStatus.ready;
+    } else {
+      // Already ready: the page was reloaded (WebView2 accelerator keys, a
+      // restarted web content process) or the platform repeated the load
+      // event. A fresh page has an empty #content; replay the last render.
+      final shown = await _eval("document.getElementById('content').childNodes.length");
+      if (shown is num && shown > 0) return;
+      _pending ??= _last;
+    }
+    await _flush();
+  }
+
+  Future<Object?> _eval(String source) async {
+    final evaluate = _evaluate;
+    if (evaluate == null || _status.value != RendererStatus.ready) return null;
+    try {
+      return await evaluate(source);
+    } catch (e) {
+      debugPrint('Renderer call failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _flush() async {
+    final pending = _pending;
+    if (pending == null || _evaluate == null || _status.value != RendererStatus.ready) return;
+    _pending = null;
+    await _eval(jsCall('render', [pending.markdown, pending.options.toJson()]));
+  }
+
+  @override
+  Future<void> render(String markdown, RenderOptions options) async {
+    _pending = (markdown: markdown, options: options);
+    _last = (markdown: markdown, options: options.withoutScrollRestore());
+    await _flush();
+  }
+
+  @override
+  Future<void> scrollToHeading(String id) => _eval(jsCall('scrollToHeading', [id]));
+
+  @override
+  Future<double> scrollPosition() async {
+    final value = await _eval('window.scrollY');
+    return value is num ? value.toDouble() : 0;
+  }
+
+  @override
+  Future<void> find(String query) => _eval(jsCall('find', [query]));
+  @override
+  Future<void> findNext() => _eval(jsCall('findNext'));
+  @override
+  Future<void> findPrevious() => _eval(jsCall('findPrev'));
+  @override
+  Future<void> clearFind() => _eval(jsCall('clearFind'));
+
+  @override
+  Future<void> print() async {
+    switch (printModeFor(_platform)) {
+      case PrintMode.native:
+        await _printWithDialog();
+      case PrintMode.javascript:
+        await _eval(jsCall('print'));
+      case PrintMode.unsupported:
+        break;
+    }
+  }
+
+  @override
+  Future<bool> savePdf(String path) async {
+    final web = _web;
+    if (!canSavePdf || web == null || _status.value != RendererStatus.ready) return false;
+    switch (_platform) {
+      case TargetPlatform.macOS:
+        return _printToFile(web, path);
+      case TargetPlatform.windows:
+        // WebView2 PrintToPdf: paginated, print media styles.
+        final bytes = await web.createPdf();
+        if (bytes == null || bytes.isEmpty) return false;
+        await File(path).writeAsBytes(bytes, flush: true);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// macOS: an NSPrintOperation that saves to [path] without any panel, so
+  /// the PDF is paginated and uses `@media print`. The plugin's call returns
+  /// before the job runs and its completion callback can arrive before a
+  /// handler is attached, so success is detected by waiting for the finished
+  /// file; a reported failure ends the wait early.
+  Future<bool> _printToFile(InAppWebViewController web, String path) async {
+    final file = File(path);
+    final previous = await file.exists() ? await file.lastModified() : null;
+    final failed = Completer<bool>();
+    final job = await web.printCurrentPage(
+      settings: PrintJobSettings(
+        handledByClient: true,
+        jobDisposition: PrintJobDisposition.SAVE,
+        jobSavingURL: WebUri(Uri.file(path).toString()),
+        jobName: p.basenameWithoutExtension(path),
+        showsPrintPanel: false,
+        showsProgressPanel: false,
+        headerAndFooter: false,
+      ),
+    );
+    if (job == null) return false;
+    job.onComplete = (completed, error) async {
+      if (!completed && !failed.isCompleted) failed.complete(false);
+      job.dispose();
+    };
+    return Future.any([waitForPdfFile(path, previousModified: previous), failed.future]);
+  }
+
+  /// Shows the platform print dialog and waits until it is finished, so the
+  /// caller can keep the print appearance (light theme) until then.
+  Future<void> _printWithDialog() async {
+    final web = _web;
+    if (web == null) return;
+    final job = await web.printCurrentPage(settings: PrintJobSettings(handledByClient: true));
+    if (job == null) return;
+    final done = Completer<void>();
+    job.onComplete = (completed, error) async {
+      if (!done.isCompleted) done.complete();
+      job.dispose();
+    };
+    await done.future.timeout(printDialogTimeout, onTimeout: () {});
+  }
+
+  @override
+  void dispose() {
+    _readyTimer?.cancel();
+    _status.dispose();
+    _headings.close();
+    _links.close();
+    _finds.close();
+    _rendered.close();
+    _errors.close();
+  }
+}
+
+class _RendererView extends StatefulWidget {
+  const _RendererView({required this.controller});
+
+  final WebViewRendererController controller;
+
+  @override
+  State<_RendererView> createState() => _RendererViewState();
+}
+
+class _RendererViewState extends State<_RendererView> {
+  bool _checked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_checkAvailability());
+  }
+
+  Future<void> _checkAvailability() async {
+    final controller = widget.controller;
+    if (controller._platform == TargetPlatform.windows) {
+      String? version;
+      try {
+        version = await WebViewEnvironment.getAvailableVersion();
+      } catch (_) {
+        version = null;
+      }
+      if (version == null) {
+        controller.markUnavailable();
+        return;
+      }
+    }
+    if (!mounted) return;
+    controller.startReadyTimer();
+    setState(() => _checked = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_checked) return const SizedBox.expand();
+    final controller = widget.controller;
+    return InAppWebView(
+      initialFile: rendererAssetPath,
+      initialSettings: InAppWebViewSettings(
+        useShouldOverrideUrlLoading: true,
+        javaScriptEnabled: true,
+        transparentBackground: true,
+        supportZoom: false,
+        isInspectable: kDebugMode,
+        allowFileAccessFromFileURLs: false,
+        allowUniversalAccessFromFileURLs: false,
+        mediaPlaybackRequiresUserGesture: true,
+        javaScriptBridgeForMainFrameOnly: true,
+        javaScriptBridgeOriginAllowList: bridgeOriginAllowList(controller._platform),
+        // WebView2: no Ctrl+R/F5 reload, DevTools, zoom or browser find/print keys.
+        browserAcceleratorKeysEnabled: false,
+      ),
+      onWebViewCreated: controller._attach,
+      shouldOverrideUrlLoading: (web, action) async => controller._policy.allowNavigation(action.request.url)
+          ? NavigationActionPolicy.ALLOW
+          : NavigationActionPolicy.CANCEL,
+      // Android does not route the initial load through shouldOverrideUrlLoading.
+      onLoadStart: (web, url) => controller._policy.allowNavigation(url),
+      onLoadStop: controller._onLoadStop,
+      // iOS/macOS/Windows: reloading starts a new web process; onLoadStop
+      // then replays the last render.
+      onWebContentProcessDidTerminate: (web) => unawaited(web.reload()),
+      onReceivedError: (web, request, error) {
+        if ((request.isForMainFrame ?? true) && controller._policy.isRendererLoad(request.url)) {
+          controller.markUnavailable();
+        }
+      },
+      onConsoleMessage: kDebugMode ? (web, message) => debugPrint('[renderer] ${message.message}') : null,
+    );
+  }
+}

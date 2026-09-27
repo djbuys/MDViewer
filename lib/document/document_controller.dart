@@ -1,0 +1,452 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show File, FileSystemEntityType, Platform;
+
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+
+import '../renderer/renderer_controller.dart';
+import '../workspace/file_source.dart';
+import '../workspace/workspace.dart';
+import 'external_launcher.dart';
+import 'link_router.dart';
+import 'text_decoding.dart';
+
+enum DocumentStatus { empty, loading, ready, error }
+
+const Map<String, String> _imageMimeTypes = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif',
+};
+
+String? imageMimeType(String path) => _imageMimeTypes[p.extension(path).toLowerCase()];
+
+/// File types a link must never hand to the OS: opening them would run code.
+const Set<String> blockedExecutableExtensions = {
+  // Windows
+  '.exe', '.bat', '.cmd', '.com', '.msi', '.ps1', '.vbs', '.js', '.jse', '.wsf', '.scr', '.lnk', '.reg',
+  // Cross-platform / macOS / Linux
+  '.jar', '.app', '.command', '.sh', '.bash', '.zsh', '.csh', '.pkg', '.dmg', '.desktop', '.run', '.bin',
+  '.appimage', '.deb', '.rpm', '.apk',
+  // Windows scripts, shortcuts and launchers
+  '.hta', '.cpl', '.msc', '.pif', '.scf', '.vbe', '.wsh', '.appref-ms', '.application', '.settingcontent-ms',
+  '.url', '.website',
+  // Interpreted scripts
+  '.py', '.pyw', '.pl', '.rb', '.jnlp',
+  // macOS scripts, workflows and location/launcher files
+  '.tool', '.terminal', '.workflow', '.action', '.scpt', '.applescript', '.osx', '.inetloc', '.fileloc', '.webloc',
+};
+
+bool isBlockedExecutable(String path) => blockedExecutableExtensions.contains(p.extension(path).toLowerCase());
+
+/// Directory "bundles" that macOS runs or loads as code (apps, plug-ins,
+/// extensions); opening one could execute it.
+const Set<String> blockedBundleExtensions = {
+  '.app', '.workflow', '.action', '.prefpane', '.saver', '.bundle', '.plugin', '.kext', '.qlgenerator',
+  '.mdimporter', '.appex', '.xpc', '.framework', '.component', '.osax', '.service', '.wdgt',
+};
+
+/// Decides whether a linked file or folder may be handed to the OS to open.
+///
+/// Always refuses [blockedExecutableExtensions]. With [posixChecks] (macOS
+/// and Linux, where any file can be made executable):
+/// - folders are allowed (they open in the file manager), except bundle
+///   folders ([blockedBundleExtensions]);
+/// - files are refused if any execute permission bit is set. Extensionless
+///   files without one (LICENSE, Makefile) are fine: LaunchServices and
+///   xdg-open do not execute them.
+class LaunchPolicy {
+  const LaunchPolicy({required this.posixChecks});
+
+  factory LaunchPolicy.forHost() => LaunchPolicy(posixChecks: !kIsWeb && (Platform.isMacOS || Platform.isLinux));
+
+  final bool posixChecks;
+
+  /// Owner, group or other execute bits (0o111).
+  static const _anyExecuteBit = 0x49;
+
+  Future<bool> blocks(String path) async {
+    if (isBlockedExecutable(path)) return true;
+    if (!posixChecks) return false;
+    try {
+      final stat = await File(path).stat();
+      return switch (stat.type) {
+        FileSystemEntityType.notFound => false,
+        FileSystemEntityType.directory => blockedBundleExtensions.contains(p.extension(path).toLowerCase()),
+        _ => stat.mode & _anyExecuteBit != 0,
+      };
+    } catch (_) {
+      return true;
+    }
+  }
+}
+
+/// The open workspace and document: loading, history, link routing,
+/// resource resolution and live reload. UI listens to this.
+class DocumentController extends ChangeNotifier {
+  DocumentController({
+    required this.renderer,
+    required this.launcher,
+    this.reloadDebounce = const Duration(milliseconds: 200),
+    this.largeFileBytes = 5 * 1024 * 1024,
+    this.hugeFileBytes = 50 * 1024 * 1024,
+    this.maxImageBytes = 20 * 1024 * 1024,
+    LaunchPolicy? launchPolicy,
+    this.renderWaitTimeout = const Duration(seconds: 10),
+  }) : launchPolicy = launchPolicy ?? LaunchPolicy.forHost() {
+    renderer.resourceResolver = resolveResource;
+    _subscriptions.addAll([
+      renderer.headings.listen(_onHeadings),
+      renderer.linkClicks.listen((href) => unawaited(handleLink(href))),
+      renderer.rendered.listen((_) => _onRendered()),
+      renderer.renderErrors.listen(_onRenderError),
+    ]);
+  }
+
+  final RendererController renderer;
+  final ExternalLauncher launcher;
+  final Duration reloadDebounce;
+  final int largeFileBytes;
+  final int hugeFileBytes;
+
+  /// Which linked files may be opened with the system.
+  final LaunchPolicy launchPolicy;
+
+  /// How long [withLightAppearance] waits for a re-render to finish.
+  final Duration renderWaitTimeout;
+
+  /// Larger images are not resolved.
+  final int maxImageBytes;
+
+  final List<StreamSubscription<Object?>> _subscriptions = [];
+  final StreamController<String> _messages = StreamController<String>.broadcast();
+  final List<String> _back = [];
+  final List<String> _forward = [];
+
+  Workspace? _workspace;
+
+  /// The file the user explicitly opened; trusted even if it is a symbolic
+  /// link that points outside the workspace root.
+  String? _explicitFile;
+  String? _path;
+  DocumentStatus _status = DocumentStatus.empty;
+  String? _error;
+  String? _text;
+  DateTime? _modified;
+  bool _fileMissing = false;
+  bool _heavyFeatures = true;
+  bool _tooLarge = false;
+  bool _showPlainText = false;
+  List<Heading> _headings = const [];
+  bool _dark = false;
+
+  /// Active [withLightAppearance] calls; while positive, documents render
+  /// light whatever [_dark] says.
+  int _lightOverrides = 0;
+  double _fontScale = 1.0;
+  String? _pendingFragment;
+  int _loadGeneration = 0;
+  String? _watchedPath;
+  StreamSubscription<void>? _watchSubscription;
+  Timer? _debounce;
+
+  Workspace? get workspace => _workspace;
+  String? get currentPath => _path;
+  DocumentStatus get status => _status;
+  String? get errorMessage => _error;
+  String? get text => _text;
+  bool get fileMissing => _fileMissing;
+  bool get heavyFeatures => _heavyFeatures;
+  bool get tooLarge => _tooLarge;
+  bool get showPlainText => _showPlainText;
+  List<Heading> get headings => _headings;
+  bool get canGoBack => _back.isNotEmpty && _path != null;
+  bool get canGoForward => _forward.isNotEmpty && _path != null;
+  bool get dark => _dark;
+  double get fontScale => _fontScale;
+
+  /// Transient user-facing messages (shown as snackbars).
+  Stream<String> get messages => _messages.stream;
+
+  String get title {
+    final path = _path;
+    final workspace = _workspace;
+    if (path != null && workspace != null) return workspace.source.pathContext.basename(path);
+    return workspace?.displayName ?? 'MDViewer';
+  }
+
+  Future<void> openWorkspace(Workspace workspace, {String? file}) async {
+    _workspace = workspace;
+    _explicitFile = file;
+    _back.clear();
+    _forward.clear();
+    _stopWatching();
+    final target = file ?? await workspace.defaultDocument();
+    if (target == null) {
+      _loadGeneration++;
+      _path = null;
+      _text = null;
+      _error = null;
+      _headings = const [];
+      _status = DocumentStatus.empty;
+      notifyListeners();
+      return;
+    }
+    await _load(target);
+  }
+
+  Future<void> open(String path, {String? fragment}) async {
+    if (path == _path && _status == DocumentStatus.ready) {
+      if (fragment != null) await renderer.scrollToHeading(fragment);
+      return;
+    }
+    final current = _path;
+    if (current != null) {
+      _back.add(current);
+      _forward.clear();
+    }
+    await _load(path, fragment: fragment);
+  }
+
+  Future<void> goBack() async {
+    final current = _path;
+    if (_back.isEmpty || current == null) return;
+    _forward.add(current);
+    await _load(_back.removeLast());
+  }
+
+  Future<void> goForward() async {
+    final current = _path;
+    if (_forward.isEmpty || current == null) return;
+    _back.add(current);
+    await _load(_forward.removeLast());
+  }
+
+  Future<void> reload() async {
+    final path = _path;
+    if (path != null) await _load(path, preserveScroll: _status == DocumentStatus.ready);
+  }
+
+  /// Re-reads the document if it changed on disk, or marks it missing if it
+  /// was deleted (keeping the last render on screen).
+  Future<void> checkForChanges() async {
+    final workspace = _workspace;
+    final path = _path;
+    if (workspace == null || path == null) return;
+    final stat = await workspace.source.stat(path);
+    if (path != _path) return;
+    if (stat == null) {
+      if (!_fileMissing) {
+        _fileMissing = true;
+        notifyListeners();
+      }
+      return;
+    }
+    if (_fileMissing || _status == DocumentStatus.error || stat.modified != _modified) {
+      await _load(path, preserveScroll: _status == DocumentStatus.ready);
+    }
+  }
+
+  Future<void> handleLink(String href) async {
+    final workspace = _workspace;
+    final path = _path;
+    if (workspace == null || path == null) return;
+    final target = LinkRouter(workspace).classify(href, currentFile: path);
+    switch (target) {
+      case InDocumentAnchor(:final fragment):
+        await renderer.scrollToHeading(fragment);
+      case WorkspaceDocument(path: final document, :final fragment):
+        await open(document, fragment: fragment);
+      case ExternalLink(:final uri):
+        if (!await launcher.launchUri(uri)) _messages.add('Could not open $uri');
+      case WorkspaceFile(path: final file):
+        final name = workspace.source.pathContext.basename(file);
+        // Check the link target too: `report.txt` may be a symlink to a
+        // script, or to a file outside the workspace.
+        if (await launchPolicy.blocks(file) ||
+            await launchPolicy.blocks(await workspace.source.realPath(file)) ||
+            !await workspace.containsRealPath(file)) {
+          _messages.add('Opening $name is blocked for safety');
+        } else if (!launcher.canOpenFiles) {
+          _messages.add('Opening $name is not supported on this device');
+        } else if (!await launcher.openFile(file)) {
+          _messages.add('Could not open $name');
+        }
+      case UnsupportedLink(href: final unsupported):
+        _messages.add('Unsupported link: $unsupported');
+    }
+  }
+
+  Future<String?> resolveResource(String reference) async {
+    final workspace = _workspace;
+    final path = _path;
+    if (workspace == null || path == null) return null;
+    final clean = reference.split('#').first.split('?').first;
+    final resolved = workspace.resolve(path, clean);
+    if (resolved == null) return null;
+    final mime = imageMimeType(resolved);
+    if (mime == null) return null;
+    try {
+      final stat = await workspace.source.stat(resolved);
+      if (stat == null || stat.size > maxImageBytes) return null;
+      if (!await workspace.containsRealPath(resolved)) return null;
+      final bytes = await workspace.source.readBytes(resolved);
+      return 'data:$mime;base64,${base64Encode(bytes)}';
+    } on FileSourceException {
+      return null;
+    }
+  }
+
+  void setAppearance({required bool dark, required double fontScale}) {
+    if (dark == _dark && fontScale == _fontScale) return;
+    _dark = dark;
+    _fontScale = fontScale;
+    // During a print/export the new appearance is applied afterwards.
+    if (_lightOverrides > 0) return;
+    if (_renderable) {
+      unawaited(() async {
+        final y = await renderer.scrollPosition();
+        await _render(restoreScrollY: y);
+      }());
+    }
+  }
+
+  bool get _renderable => _status == DocumentStatus.ready && _text != null && !_tooLarge && !_showPlainText;
+
+  /// Runs [action] (print, PDF export) with the document rendered in the
+  /// light appearance: in dark mode, re-renders light and waits for the
+  /// render to finish, runs [action], then re-renders with the current
+  /// appearance at the original scroll position.
+  Future<T> withLightAppearance<T>(Future<T> Function() action) async {
+    if (!_dark || _lightOverrides > 0 || !_renderable) return action();
+    final scrollY = await renderer.scrollPosition();
+    _lightOverrides++;
+    try {
+      await _renderAndWait(restoreScrollY: scrollY);
+      return await action();
+    } finally {
+      _lightOverrides--;
+      if (_renderable) await _renderAndWait(restoreScrollY: scrollY);
+    }
+  }
+
+  Future<void> _renderAndWait({double? restoreScrollY}) async {
+    final finished = renderer.rendered.first.timeout(renderWaitTimeout, onTimeout: () {});
+    await _render(restoreScrollY: restoreScrollY);
+    await finished;
+  }
+
+  void showAsPlainText() {
+    if (_text == null) return;
+    _showPlainText = true;
+    _status = DocumentStatus.ready;
+    _error = null;
+    notifyListeners();
+  }
+
+  Future<void> _load(String path, {String? fragment, bool preserveScroll = false}) async {
+    final workspace = _workspace;
+    if (workspace == null) return;
+    final generation = ++_loadGeneration;
+    final scrollY = preserveScroll ? await renderer.scrollPosition() : null;
+    if (generation != _loadGeneration) return;
+    final samePath = path == _path;
+    _path = path;
+    _status = DocumentStatus.loading;
+    _error = null;
+    _fileMissing = false;
+    _showPlainText = false;
+    if (!samePath) _headings = const [];
+    notifyListeners();
+    _watch(path);
+    try {
+      final stat = await workspace.source.stat(path);
+      if (generation != _loadGeneration) return;
+      if (stat == null) throw FileSourceException(path, 'File not found: $path');
+      if (path != _explicitFile && !await workspace.containsRealPath(path)) {
+        throw FileSourceException(path, 'Not opening $path: it links to a file outside the opened folder.');
+      }
+      if (generation != _loadGeneration) return;
+      final bytes = await workspace.source.readBytes(path);
+      if (generation != _loadGeneration) return;
+      _modified = stat.modified;
+      _tooLarge = stat.size > hugeFileBytes;
+      _heavyFeatures = stat.size <= largeFileBytes;
+      _text = decodeText(bytes);
+      _pendingFragment = fragment;
+      _status = DocumentStatus.ready;
+      notifyListeners();
+      if (!_tooLarge) await _render(restoreScrollY: scrollY);
+    } on FileSourceException catch (e) {
+      if (generation != _loadGeneration) return;
+      _text = null;
+      _status = DocumentStatus.error;
+      _error = e.message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _render({double? restoreScrollY}) => renderer.render(
+        _text!,
+        RenderOptions(
+          dark: _dark && _lightOverrides == 0,
+          fontScale: _fontScale,
+          heavyFeatures: _heavyFeatures,
+          restoreScrollY: restoreScrollY,
+        ),
+      );
+
+  void _watch(String path) {
+    if (_watchedPath == path) return;
+    _stopWatching();
+    final source = _workspace!.source;
+    if (!source.supportsWatch) return;
+    _watchedPath = path;
+    _watchSubscription = source.watch(path).listen((_) {
+      _debounce?.cancel();
+      _debounce = Timer(reloadDebounce, () => unawaited(checkForChanges()));
+    });
+  }
+
+  void _stopWatching() {
+    _debounce?.cancel();
+    _debounce = null;
+    unawaited(_watchSubscription?.cancel());
+    _watchSubscription = null;
+    _watchedPath = null;
+  }
+
+  void _onHeadings(List<Heading> headings) {
+    _headings = headings;
+    notifyListeners();
+  }
+
+  void _onRendered() {
+    final fragment = _pendingFragment;
+    _pendingFragment = null;
+    if (fragment != null) unawaited(renderer.scrollToHeading(fragment));
+  }
+
+  void _onRenderError(String message) {
+    _status = DocumentStatus.error;
+    _error = 'The document could not be rendered: $message';
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _stopWatching();
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel());
+    }
+    unawaited(_messages.close());
+    super.dispose();
+  }
+}

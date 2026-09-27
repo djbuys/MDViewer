@@ -1,0 +1,38 @@
+:root { --mdv-font-scale: 1; color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+html, body { margin: 0; padding: 0; }
+body { background: #ffffff; }
+:root[data-theme="dark"] body { background: #0d1117; }
+.markdown-body {
+  box-sizing: border-box;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  font-size: calc(16px * var(--mdv-font-scale));
+}
+@media (max-width: 600px) { .markdown-body { padding: 16px 16px 48px; } }
+.mermaid-diagram { text-align: center; margin: 16px 0; overflow-x: auto; }
+.mdv-mermaid-error, .mdv-broken-image {
+  color: #cf222e; border: 1px dashed #cf222e; padding: 8px; border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 85%;
+}
+.mdv-broken-image { display: inline-block; min-width: 120px; min-height: 24px; }
+mark.mdv-find { background: #fff8c5; color: inherit; border-radius: 2px; }
+mark.mdv-find-current { background: #ffb000; }
+:root[data-theme="dark"] mark.mdv-find { background: #634d00; }
+:root[data-theme="dark"] mark.mdv-find-current { background: #bb8009; }
+.math-block, .katex-block { overflow-x: auto; }
+@media print {
+  /* Printing and PDF export always use light colours, even if the page is
+     still in the dark theme (the app re-renders light first; this is the
+     fallback). */
+  :root, :root[data-theme="dark"] { color-scheme: light; }
+  html, body, :root[data-theme="dark"] body { background: #ffffff !important; color: #1f2328 !important; }
+  .markdown-body, :root[data-theme="dark"] .markdown-body {
+    background: #ffffff !important;
+    color: #1f2328 !important;
+    max-width: none;
+    padding: 0;
+  }
+  mark.mdv-find, mark.mdv-find-current { background: transparent !important; }
+}

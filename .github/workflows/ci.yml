@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: renderer/package-lock.json
+      - name: Renderer tests and freshness check
+        working-directory: renderer
+        run: |
+          npm ci
+          npm test
+          npm run check-built
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.0
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  integration-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.0
+          channel: stable
+          cache: true
+      # One file per invocation: flutter_tools fails to relaunch the macOS app
+      # for a second file in the same run ("Unable to start the app on the device").
+      - name: Integration tests (macOS)
+        run: |
+          for test_file in integration_test/*_test.dart; do
+            echo "::group::$test_file"
+            flutter test "$test_file" -d macos
+            echo "::endgroup::"
+          done
+
+  build-windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.0
+          channel: stable
+          cache: true
+      - run: flutter build windows --release
