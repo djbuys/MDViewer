@@ -16,8 +16,17 @@ class FakeRendererController implements RendererController {
   bool printable;
   bool savePdfSupported;
 
-  /// What [createPdf] returns.
-  Uint8List? pdfBytes;
+  /// What [savePdf] answers.
+  bool savePdfResult = true;
+  final List<String> savedPdfPaths = [];
+
+  /// The render options in effect when [savePdf] / [print] ran.
+  final List<RenderOptions?> optionsAtSave = [];
+  final List<RenderOptions?> optionsAtPrint = [];
+
+  /// Emit [rendered] (asynchronously) after every [render], like the real
+  /// renderer does once a render has finished.
+  bool emitRenderedOnRender = false;
   String? reason;
   final List<String> calls = [];
   String? lastMarkdown;
@@ -68,6 +77,7 @@ class FakeRendererController implements RendererController {
     renderCount++;
     lastMarkdown = markdown;
     lastOptions = options;
+    if (emitRenderedOnRender) scheduleMicrotask(emitRendered);
   }
 
   @override
@@ -83,11 +93,17 @@ class FakeRendererController implements RendererController {
   @override
   Future<void> clearFind() async => calls.add('clearFind');
   @override
-  Future<void> print() async => calls.add('print');
+  Future<void> print() async {
+    calls.add('print');
+    optionsAtPrint.add(lastOptions);
+  }
+
   @override
-  Future<Uint8List?> createPdf() async {
-    calls.add('createPdf');
-    return pdfBytes;
+  Future<bool> savePdf(String path) async {
+    calls.add('savePdf');
+    optionsAtSave.add(lastOptions);
+    savedPdfPaths.add(path);
+    return savePdfResult;
   }
 
   @override

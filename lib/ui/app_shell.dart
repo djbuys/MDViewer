@@ -117,7 +117,8 @@ class _AppShellState extends State<AppShell> implements AppActionHost {
   Future<void> printDocument() async {
     final services = AppScope.of(context);
     try {
-      await services.renderer.print();
+      // Print with the light appearance even in dark mode.
+      await services.document.withLightAppearance(services.renderer.print);
     } catch (e) {
       if (mounted) showMessage(context, 'Printing failed: $e');
     }

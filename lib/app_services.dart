@@ -24,7 +24,6 @@ class AppServices {
     IncomingFiles? incoming,
     this.sharer = const SharePlusDocumentSharer(),
     this.pickSaveLocation = pickPdfSaveLocation,
-    this.writeFile = writeFileBytes,
     this.defaultApp = const UnsupportedDefaultAppHandler(),
   }) : incoming = incoming ?? IncomingFiles(useChannel: false);
 
@@ -53,7 +52,6 @@ class AppServices {
   final IncomingFiles incoming;
   final DocumentSharer sharer;
   final SaveLocationPicker pickSaveLocation;
-  final FileWriter writeFile;
   final DefaultAppHandler defaultApp;
 
   void dispose() {

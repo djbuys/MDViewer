@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:mdviewer/app_services.dart';
 import 'package:mdviewer/document/document_controller.dart';
@@ -40,9 +38,6 @@ class TestHarness {
   /// What the save-location picker answers (null = cancelled).
   String? saveLocation;
 
-  /// Files "written" through [AppServices.writeFile].
-  final Map<String, Uint8List> writtenFiles = {};
-
   /// A folder workspace at /ws containing README.md, guide.md and docs/b.md.
   OpenRequest folderRequest() => OpenRequest(
         workspace: Workspace.folder(source: source, root: '/ws'),
@@ -79,7 +74,6 @@ Future<TestHarness> createHarness({IncomingFiles? incoming, bool resetPreference
       harness.saveSuggestions.add(name);
       return harness.saveLocation;
     },
-    writeFile: (path, bytes) async => harness.writtenFiles[path] = bytes,
     defaultApp: defaultApp,
   );
   return harness = TestHarness(

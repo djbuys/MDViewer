@@ -1,18 +1,14 @@
 import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mdviewer/app.dart';
-import 'package:mdviewer/platform/file_saving.dart';
+import 'package:mdviewer/settings/settings.dart';
 
 import '../support/test_app.dart';
 
 // Harnesses are created inside each testWidgets body (not setUp).
 void main() {
-  final pdf = Uint8List.fromList(utf8.encode('%PDF-1.7 fake'));
-
   Future<TestHarness> pumpWithDocument(
     WidgetTester tester, {
     Size size = const Size(1280, 800),
@@ -29,36 +25,64 @@ void main() {
     return h;
   }
 
-  testWidgets('Save as PDF asks for a location and writes the renderer PDF there', (tester) async {
+  testWidgets('Save as PDF asks for a location and has the renderer save the PDF there', (tester) async {
     final h = await pumpWithDocument(tester);
-    h.renderer.pdfBytes = pdf;
     h.saveLocation = '/out/README.pdf';
 
     await tester.tap(find.byKey(const Key('action-save-pdf')));
     await tester.pumpAndSettle();
 
     expect(h.saveSuggestions, ['README.pdf']);
-    expect(h.writtenFiles['/out/README.pdf'], pdf);
+    expect(h.renderer.savedPdfPaths, ['/out/README.pdf']);
     expect(find.text('Saved README.pdf'), findsOneWidget);
+  });
+
+  testWidgets('Save as PDF always saves with a .pdf extension', (tester) async {
+    final h = await pumpWithDocument(tester);
+    for (final (chosen, saved) in [('/out/report', '/out/report.pdf'), ('/out/report.txt', '/out/report.txt.pdf')]) {
+      h.saveLocation = chosen;
+      await tester.tap(find.byKey(const Key('action-save-pdf')));
+      await tester.pumpAndSettle();
+      expect(h.renderer.savedPdfPaths.last, saved);
+    }
   });
 
   testWidgets('Save as PDF does nothing when the user cancels', (tester) async {
     final h = await pumpWithDocument(tester);
-    h.renderer.pdfBytes = pdf;
     await tester.tap(find.byKey(const Key('action-save-pdf')));
     await tester.pumpAndSettle();
     expect(h.saveSuggestions, hasLength(1));
-    expect(h.writtenFiles, isEmpty);
-    expect(h.renderer.calls, isNot(contains('createPdf')));
+    expect(h.renderer.savedPdfPaths, isEmpty);
   });
 
-  testWidgets('Save as PDF reports a failed conversion', (tester) async {
+  testWidgets('Save as PDF reports a failed export', (tester) async {
     final h = await pumpWithDocument(tester);
     h.saveLocation = '/out/README.pdf';
+    h.renderer.savePdfResult = false;
     await tester.tap(find.byKey(const Key('action-save-pdf')));
     await tester.pumpAndSettle();
-    expect(h.writtenFiles, isEmpty);
     expect(find.textContaining('Could not save PDF'), findsOneWidget);
+  });
+
+  testWidgets('Save as PDF and Print use the light appearance in dark mode, then restore it', (tester) async {
+    final harness = await createHarness();
+    harness.renderer.emitRenderedOnRender = true;
+    await harness.services.settings.setThemeMode(AppThemeMode.dark);
+    final h = await pumpWithDocument(tester, harness: harness);
+    h.renderer.scrollY = 250;
+    expect(h.renderer.lastOptions!.dark, isTrue);
+    h.saveLocation = '/out/README.pdf';
+
+    await tester.tap(find.byKey(const Key('action-save-pdf')));
+    await tester.pumpAndSettle();
+    expect(h.renderer.optionsAtSave.single!.dark, isFalse);
+    expect(h.renderer.lastOptions!.dark, isTrue);
+    expect(h.renderer.lastOptions!.restoreScrollY, 250);
+
+    await tester.tap(find.byKey(const Key('action-print')));
+    await tester.pumpAndSettle();
+    expect(h.renderer.optionsAtPrint.single!.dark, isFalse);
+    expect(h.renderer.lastOptions!.dark, isTrue);
   });
 
   testWidgets('Save as PDF is hidden where the renderer cannot create PDFs', (tester) async {
@@ -69,14 +93,6 @@ void main() {
     await tester.tap(find.byKey(const Key('action-more')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('menu-save-pdf')), findsNothing);
-  });
-
-  test('the default writer writes the bytes to the chosen path', () async {
-    final dir = await Directory.systemTemp.createTemp('mdv_pdf');
-    addTearDown(() => dir.delete(recursive: true));
-    final path = '${dir.path}/out.pdf';
-    await writeFileBytes(path, pdf);
-    expect(await File(path).readAsBytes(), pdf);
   });
 
   testWidgets('Share hands the Markdown file to the sharer, anchored at the button', (tester) async {

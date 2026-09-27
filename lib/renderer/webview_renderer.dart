@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:path/path.dart' as p;
+
+import '../platform/file_saving.dart';
 
 import 'renderer_bridge.dart';
 import 'renderer_controller.dart';
@@ -12,11 +16,17 @@ typedef JsEvaluator = Future<Object?> Function(String source);
 /// Hosts the bundled JS renderer in a WebView. Only one view should be
 /// mounted per controller; keep it mounted for the app's lifetime.
 class WebViewRendererController implements RendererController {
-  WebViewRendererController({TargetPlatform? platform, this.readyTimeout = const Duration(seconds: 15)})
-      : _platform = platform ?? defaultTargetPlatform;
+  WebViewRendererController({
+    TargetPlatform? platform,
+    this.readyTimeout = const Duration(seconds: 15),
+    this.printDialogTimeout = const Duration(minutes: 30),
+  }) : _platform = platform ?? defaultTargetPlatform;
 
   final TargetPlatform _platform;
   final Duration readyTimeout;
+
+  /// How long [print] waits for the print dialog to be dismissed.
+  final Duration printDialogTimeout;
 
   final ValueNotifier<RendererStatus> _status = ValueNotifier(RendererStatus.loading);
   final _headings = StreamController<List<Heading>>.broadcast();
@@ -269,7 +279,7 @@ class WebViewRendererController implements RendererController {
   Future<void> print() async {
     switch (printModeFor(_platform)) {
       case PrintMode.native:
-        await _web?.printCurrentPage();
+        await _printWithDialog();
       case PrintMode.javascript:
         await _eval(jsCall('print'));
       case PrintMode.unsupported:
@@ -278,10 +288,64 @@ class WebViewRendererController implements RendererController {
   }
 
   @override
-  Future<Uint8List?> createPdf() async {
+  Future<bool> savePdf(String path) async {
     final web = _web;
-    if (!canSavePdf || web == null || _status.value != RendererStatus.ready) return null;
-    return web.createPdf();
+    if (!canSavePdf || web == null || _status.value != RendererStatus.ready) return false;
+    switch (_platform) {
+      case TargetPlatform.macOS:
+        return _printToFile(web, path);
+      case TargetPlatform.windows:
+        // WebView2 PrintToPdf: paginated, print media styles.
+        final bytes = await web.createPdf();
+        if (bytes == null || bytes.isEmpty) return false;
+        await File(path).writeAsBytes(bytes, flush: true);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// macOS: an NSPrintOperation that saves to [path] without any panel, so
+  /// the PDF is paginated and uses `@media print`. The plugin's call returns
+  /// before the job runs and its completion callback can arrive before a
+  /// handler is attached, so success is detected by waiting for the finished
+  /// file; a reported failure ends the wait early.
+  Future<bool> _printToFile(InAppWebViewController web, String path) async {
+    final file = File(path);
+    final previous = await file.exists() ? await file.lastModified() : null;
+    final failed = Completer<bool>();
+    final job = await web.printCurrentPage(
+      settings: PrintJobSettings(
+        handledByClient: true,
+        jobDisposition: PrintJobDisposition.SAVE,
+        jobSavingURL: WebUri(Uri.file(path).toString()),
+        jobName: p.basenameWithoutExtension(path),
+        showsPrintPanel: false,
+        showsProgressPanel: false,
+        headerAndFooter: false,
+      ),
+    );
+    if (job == null) return false;
+    job.onComplete = (completed, error) async {
+      if (!completed && !failed.isCompleted) failed.complete(false);
+      job.dispose();
+    };
+    return Future.any([waitForPdfFile(path, previousModified: previous), failed.future]);
+  }
+
+  /// Shows the platform print dialog and waits until it is finished, so the
+  /// caller can keep the print appearance (light theme) until then.
+  Future<void> _printWithDialog() async {
+    final web = _web;
+    if (web == null) return;
+    final job = await web.printCurrentPage(settings: PrintJobSettings(handledByClient: true));
+    if (job == null) return;
+    final done = Completer<void>();
+    job.onComplete = (completed, error) async {
+      if (!done.isCompleted) done.complete();
+      job.dispose();
+    };
+    await done.future.timeout(printDialogTimeout, onTimeout: () {});
   }
 
   @override

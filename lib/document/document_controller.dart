@@ -99,6 +99,7 @@ class DocumentController extends ChangeNotifier {
     this.hugeFileBytes = 50 * 1024 * 1024,
     this.maxImageBytes = 20 * 1024 * 1024,
     LaunchPolicy? launchPolicy,
+    this.renderWaitTimeout = const Duration(seconds: 10),
   }) : launchPolicy = launchPolicy ?? LaunchPolicy.forHost() {
     renderer.resourceResolver = resolveResource;
     _subscriptions.addAll([
@@ -117,6 +118,9 @@ class DocumentController extends ChangeNotifier {
 
   /// Which linked files may be opened with the system.
   final LaunchPolicy launchPolicy;
+
+  /// How long [withLightAppearance] waits for a re-render to finish.
+  final Duration renderWaitTimeout;
 
   /// Larger images are not resolved.
   final int maxImageBytes;
@@ -142,6 +146,10 @@ class DocumentController extends ChangeNotifier {
   bool _showPlainText = false;
   List<Heading> _headings = const [];
   bool _dark = false;
+
+  /// Active [withLightAppearance] calls; while positive, documents render
+  /// light whatever [_dark] says.
+  int _lightOverrides = 0;
   double _fontScale = 1.0;
   String? _pendingFragment;
   int _loadGeneration = 0;
@@ -300,12 +308,39 @@ class DocumentController extends ChangeNotifier {
     if (dark == _dark && fontScale == _fontScale) return;
     _dark = dark;
     _fontScale = fontScale;
-    if (_status == DocumentStatus.ready && _text != null && !_tooLarge && !_showPlainText) {
+    // During a print/export the new appearance is applied afterwards.
+    if (_lightOverrides > 0) return;
+    if (_renderable) {
       unawaited(() async {
         final y = await renderer.scrollPosition();
         await _render(restoreScrollY: y);
       }());
     }
+  }
+
+  bool get _renderable => _status == DocumentStatus.ready && _text != null && !_tooLarge && !_showPlainText;
+
+  /// Runs [action] (print, PDF export) with the document rendered in the
+  /// light appearance: in dark mode, re-renders light and waits for the
+  /// render to finish, runs [action], then re-renders with the current
+  /// appearance at the original scroll position.
+  Future<T> withLightAppearance<T>(Future<T> Function() action) async {
+    if (!_dark || _lightOverrides > 0 || !_renderable) return action();
+    final scrollY = await renderer.scrollPosition();
+    _lightOverrides++;
+    try {
+      await _renderAndWait(restoreScrollY: scrollY);
+      return await action();
+    } finally {
+      _lightOverrides--;
+      if (_renderable) await _renderAndWait(restoreScrollY: scrollY);
+    }
+  }
+
+  Future<void> _renderAndWait({double? restoreScrollY}) async {
+    final finished = renderer.rendered.first.timeout(renderWaitTimeout, onTimeout: () {});
+    await _render(restoreScrollY: restoreScrollY);
+    await finished;
   }
 
   void showAsPlainText() {
@@ -361,7 +396,7 @@ class DocumentController extends ChangeNotifier {
   Future<void> _render({double? restoreScrollY}) => renderer.render(
         _text!,
         RenderOptions(
-          dark: _dark,
+          dark: _dark && _lightOverrides == 0,
           fontScale: _fontScale,
           heavyFeatures: _heavyFeatures,
           restoreScrollY: restoreScrollY,

@@ -365,6 +365,89 @@ void main() {
     expect(renderer.renderCount, renders + 1);
   });
 
+  group('withLightAppearance (print / PDF export)', () {
+    test('a dark document is re-rendered light for the action, then dark again at the same scroll position',
+        () async {
+      renderer.emitRenderedOnRender = true;
+      controller.setAppearance(dark: true, fontScale: 1.2);
+      await controller.openWorkspace(workspace);
+      renderer.scrollY = 300;
+      final rendersBefore = renderer.renderCount;
+
+      RenderOptions? during;
+      final result = await controller.withLightAppearance(() async {
+        during = renderer.lastOptions;
+        return 'done';
+      });
+
+      expect(result, 'done');
+      expect(during!.dark, isFalse);
+      expect(during!.fontScale, 1.2);
+      expect(during!.restoreScrollY, 300);
+      expect(renderer.renderCount, rendersBefore + 2);
+      expect(renderer.lastOptions!.dark, isTrue);
+      expect(renderer.lastOptions!.restoreScrollY, 300);
+    });
+
+    test('the action waits for the light render to finish', () async {
+      controller.setAppearance(dark: true, fontScale: 1);
+      await controller.openWorkspace(workspace);
+      var ran = false;
+      final export = controller.withLightAppearance(() async => ran = true);
+      await settle();
+      expect(ran, isFalse, reason: 'still waiting for the rendered event');
+      renderer.emitRendered();
+      await settle();
+      expect(ran, isTrue);
+      renderer.emitRendered();
+      await export;
+      expect(renderer.lastOptions!.dark, isTrue);
+    });
+
+    test('a render that never reports back times out instead of blocking the export', () async {
+      final slow = DocumentController(
+        renderer: renderer,
+        launcher: launcher,
+        reloadDebounce: Duration.zero,
+        renderWaitTimeout: const Duration(milliseconds: 30),
+      );
+      addTearDown(slow.dispose);
+      slow.setAppearance(dark: true, fontScale: 1);
+      await slow.openWorkspace(workspace);
+      expect(await slow.withLightAppearance(() async => 42), 42);
+      expect(renderer.lastOptions!.dark, isTrue);
+    });
+
+    test('appearance updates during the action do not switch back to dark early', () async {
+      renderer.emitRenderedOnRender = true;
+      controller.setAppearance(dark: true, fontScale: 1);
+      await controller.openWorkspace(workspace);
+      await controller.withLightAppearance(() async {
+        controller.setAppearance(dark: true, fontScale: 1.1); // e.g. a rebuild mid-export
+        await settle();
+        expect(renderer.lastOptions!.dark, isFalse);
+      });
+      expect(renderer.lastOptions!.dark, isTrue);
+      expect(renderer.lastOptions!.fontScale, 1.1);
+    });
+
+    test('a light document is not re-rendered', () async {
+      renderer.emitRenderedOnRender = true;
+      await controller.openWorkspace(workspace);
+      final renders = renderer.renderCount;
+      await controller.withLightAppearance(() async {});
+      expect(renderer.renderCount, renders);
+    });
+
+    test('the dark appearance is restored when the action throws', () async {
+      renderer.emitRenderedOnRender = true;
+      controller.setAppearance(dark: true, fontScale: 1);
+      await controller.openWorkspace(workspace);
+      await expectLater(controller.withLightAppearance(() async => throw StateError('x')), throwsStateError);
+      expect(renderer.lastOptions!.dark, isTrue);
+    });
+  });
+
   test('appearance set before opening is used for the first render', () async {
     controller.setAppearance(dark: true, fontScale: 1.4);
     await controller.openWorkspace(workspace);

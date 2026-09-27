@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import '../app_services.dart';
+import '../platform/file_saving.dart';
 
 /// Exports the rendered document as a PDF where the user chooses.
 Future<void> savePdfCommand(BuildContext context, AppServices services) async {
@@ -13,15 +14,12 @@ Future<void> savePdfCommand(BuildContext context, AppServices services) async {
   if (path == null || workspace == null || !services.renderer.canSavePdf) return;
   final name = workspace.source.pathContext.basenameWithoutExtension(path);
   try {
-    var target = await services.pickSaveLocation('$name.pdf');
-    if (target == null) return;
-    if (p.extension(target).isEmpty) target = '$target.pdf';
-    final bytes = await services.renderer.createPdf();
-    if (bytes == null || bytes.isEmpty) throw const FormatException('the document could not be converted');
-    await services.writeFile(target, bytes);
-    say('Saved ${p.basename(target)}');
-  } on FormatException catch (e) {
-    say('Could not save PDF: ${e.message}');
+    final chosen = await services.pickSaveLocation('$name.pdf');
+    if (chosen == null) return;
+    final target = ensurePdfExtension(chosen);
+    // Export with the light (print) appearance even in dark mode.
+    final saved = await document.withLightAppearance(() => services.renderer.savePdf(target));
+    say(saved ? 'Saved ${p.basename(target)}' : 'Could not save PDF: the document could not be exported');
   } catch (e) {
     say('Could not save PDF: $e');
   }

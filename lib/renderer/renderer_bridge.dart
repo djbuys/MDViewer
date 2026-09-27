@@ -82,9 +82,10 @@ PrintMode printModeFor(TargetPlatform platform) => switch (platform) {
       _ => PrintMode.unsupported,
     };
 
-/// `createPdf` is implemented by flutter_inappwebview on iOS, macOS and
-/// Windows. iOS already offers "Save to Files" in its print sheet, so the app
-/// offers Save as PDF on macOS and Windows only.
+/// Save as PDF: macOS prints to a file (paginated, print styles); Windows
+/// uses WebView2's PrintToPdf (`createPdf`), which also paginates. iOS already
+/// offers "Save to Files" in its print sheet, so the app offers Save as PDF
+/// on macOS and Windows only.
 bool savePdfSupported(TargetPlatform platform) =>
     platform == TargetPlatform.macOS || platform == TargetPlatform.windows;
 

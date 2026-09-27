@@ -98,7 +98,7 @@ abstract interface class RendererController {
 
   bool get canPrint;
 
-  /// Whether [createPdf] is supported (macOS and Windows).
+  /// Whether [savePdf] is supported (macOS and Windows).
   bool get canSavePdf;
 
   Widget buildView(BuildContext context);
@@ -110,9 +110,13 @@ abstract interface class RendererController {
   Future<void> findNext();
   Future<void> findPrevious();
   Future<void> clearFind();
+
+  /// Shows the print dialog; on macOS, iOS and Android completes only when
+  /// the dialog is done, so callers can keep the print appearance until then.
   Future<void> print();
 
-  /// The rendered document as PDF data, or null if it could not be created.
-  Future<Uint8List?> createPdf();
+  /// Saves the rendered document as a paginated PDF at [path]; true once the
+  /// file is written.
+  Future<bool> savePdf(String path);
   void dispose();
 }

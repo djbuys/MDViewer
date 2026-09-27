@@ -23,6 +23,16 @@ mark.mdv-find-current { background: #ffb000; }
 :root[data-theme="dark"] mark.mdv-find-current { background: #bb8009; }
 .math-block, .katex-block { overflow-x: auto; }
 @media print {
-  body { background: #ffffff; }
-  .markdown-body { max-width: none; padding: 0; }
+  /* Printing and PDF export always use light colours, even if the page is
+     still in the dark theme (the app re-renders light first; this is the
+     fallback). */
+  :root, :root[data-theme="dark"] { color-scheme: light; }
+  html, body, :root[data-theme="dark"] body { background: #ffffff !important; color: #1f2328 !important; }
+  .markdown-body, :root[data-theme="dark"] .markdown-body {
+    background: #ffffff !important;
+    color: #1f2328 !important;
+    max-width: none;
+    padding: 0;
+  }
+  mark.mdv-find, mark.mdv-find-current { background: transparent !important; }
 }
