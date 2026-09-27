@@ -56,8 +56,9 @@ async function renderMermaid(generation) {
 
 async function render(markdown, options = {}) {
   const generation = ++state.generation;
+  const { restoreScrollY, ...persistent } = options;
   state.markdown = markdown;
-  state.options = { ...state.options, ...options };
+  state.options = { ...state.options, ...persistent };
   applyTheme(state.options.theme);
   document.documentElement.style.setProperty('--mdv-font-scale', String(state.options.fontScale));
   try {
@@ -76,8 +77,8 @@ async function render(markdown, options = {}) {
       state.options.heavyFeatures ? renderMermaid(generation) : Promise.resolve(),
     ]);
     if (generation !== state.generation) return;
-    if (typeof state.options.restoreScrollY === 'number') {
-      window.scrollTo(0, state.options.restoreScrollY);
+    if (typeof restoreScrollY === 'number') {
+      window.scrollTo(0, restoreScrollY);
     }
     callHost('rendered', { generation });
   } catch (err) {
