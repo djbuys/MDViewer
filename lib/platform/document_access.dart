@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 
 import '../settings/recents.dart';
 import '../workspace/workspace.dart';
 import 'desktop_document_access.dart';
+import 'ios_document_access.dart';
 
 /// What to show after the user picked or restored something.
 @immutable
@@ -39,4 +42,7 @@ abstract interface class DocumentAccess {
   Future<OpenRequest?> openIncoming(IncomingDocument document);
 }
 
-DocumentAccess createDocumentAccess() => DesktopDocumentAccess();
+DocumentAccess createDocumentAccess() {
+  if (Platform.isIOS) return IosDocumentAccess();
+  return DesktopDocumentAccess();
+}
