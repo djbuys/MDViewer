@@ -88,6 +88,16 @@ void main() {
     final src = await renderer.debugEvaluate("document.querySelector('img').getAttribute('src')");
     expect(src, startsWith('data:image/png;base64,'));
 
+    // Save as PDF (macOS/Windows): the WebView produces a real PDF.
+    if (renderer.canSavePdf) {
+      final pdf = await renderer.createPdf();
+      expect(pdf, isNotNull);
+      expect(latin1.decode(pdf!.sublist(0, 5)), '%PDF-');
+      final pages = RegExp(r'/Type\s*/Page[^s]').allMatches(latin1.decode(pdf)).length;
+      // ignore: avoid_print
+      print('createPdf: ${pdf.length} bytes, $pages page object(s)');
+    }
+
     // Navigation lock: neither a remote page nor a file: copy of the renderer
     // page may replace the bundled renderer.
     final rendererHref = await renderer.debugEvaluate('window.location.href');

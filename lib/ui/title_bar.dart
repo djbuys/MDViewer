@@ -135,7 +135,7 @@ class MdTitleBar extends StatelessWidget implements PreferredSizeWidget {
         ));
       }
       previous = action.group;
-      widgets.add(SizedBox.square(dimension: buttonExtent, child: _button(action)));
+      widgets.add(SizedBox.square(key: action.anchorKey, dimension: buttonExtent, child: _button(action)));
     }
     widgets.add(SizedBox.square(dimension: buttonExtent, child: _overflowButton(overflow)));
     return widgets;

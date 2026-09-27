@@ -4,6 +4,8 @@ import 'document/document_controller.dart';
 import 'document/external_launcher.dart';
 import 'open_actions.dart';
 import 'platform/document_access.dart';
+import 'platform/document_sharer.dart';
+import 'platform/file_saving.dart';
 import 'platform/incoming_files.dart';
 import 'renderer/renderer_controller.dart';
 import 'renderer/webview_renderer.dart';
@@ -19,6 +21,9 @@ class AppServices {
     required this.document,
     required this.actions,
     IncomingFiles? incoming,
+    this.sharer = const SharePlusDocumentSharer(),
+    this.pickSaveLocation = pickPdfSaveLocation,
+    this.writeFile = writeFileBytes,
   }) : incoming = incoming ?? IncomingFiles(useChannel: false);
 
   static Future<AppServices> create({List<String> args = const []}) async {
@@ -43,6 +48,9 @@ class AppServices {
   final DocumentController document;
   final OpenActions actions;
   final IncomingFiles incoming;
+  final DocumentSharer sharer;
+  final SaveLocationPicker pickSaveLocation;
+  final FileWriter writeFile;
 
   void dispose() {
     incoming.dispose();

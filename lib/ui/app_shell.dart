@@ -10,6 +10,7 @@ import '../search/find_bar.dart';
 import '../search/folder_search_dialog.dart';
 import '../settings/settings.dart';
 import 'app_actions.dart';
+import 'document_commands.dart';
 import 'document_pane.dart';
 import 'file_sidebar.dart';
 import 'open_commands.dart';
@@ -117,6 +118,26 @@ class _AppShellState extends State<AppShell> implements AppActionHost {
   void openContentsDrawer() => _scaffoldKey.currentState?.openEndDrawer();
 
   @override
+  final GlobalKey shareAnchor = GlobalKey(debugLabel: 'share');
+  final GlobalKey _titleBarKey = GlobalKey(debugLabel: 'title bar');
+
+  /// Keeps the document pane (and its WebView) alive when the layout
+  /// changes around it: wide/narrow switches, panels appearing.
+  final GlobalKey _documentPaneKey = GlobalKey(debugLabel: 'document');
+
+  @override
+  Future<void> savePdf() => savePdfCommand(context, AppScope.of(context));
+
+  @override
+  Future<void> shareDocument() {
+    // The share button when it is in the title bar, else the title bar
+    // (the button is in the overflow menu).
+    final box = (shareAnchor.currentContext ?? _titleBarKey.currentContext)?.findRenderObject();
+    final origin = box is RenderBox && box.hasSize ? box.localToGlobal(Offset.zero) & box.size : null;
+    return shareDocumentCommand(context, AppScope.of(context), origin: origin);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final services = AppScope.of(context);
     return ListenableBuilder(
@@ -178,13 +199,14 @@ class _AppShellState extends State<AppShell> implements AppActionHost {
             onClose: _closeFind,
             initialQuery: _findQuery,
           ),
-        const Expanded(child: DocumentPane()),
+        Expanded(child: DocumentPane(key: _documentPaneKey)),
       ],
     );
     final filesDrawer = !wide && hasFolder;
     return Scaffold(
       key: _scaffoldKey,
       appBar: MdTitleBar(
+        key: _titleBarKey,
         title: document.title,
         actions: actions,
         platform: platform,

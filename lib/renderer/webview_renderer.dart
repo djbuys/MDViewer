@@ -55,6 +55,8 @@ class WebViewRendererController implements RendererController {
   set resourceResolver(ResourceResolver? resolver) => _resolver = resolver;
   @override
   bool get canPrint => printModeFor(_platform) != PrintMode.unsupported;
+  @override
+  bool get canSavePdf => savePdfSupported(_platform);
 
   @override
   Widget buildView(BuildContext context) => _RendererView(controller: this);
@@ -226,6 +228,13 @@ class WebViewRendererController implements RendererController {
       case PrintMode.unsupported:
         break;
     }
+  }
+
+  @override
+  Future<Uint8List?> createPdf() async {
+    final web = _web;
+    if (!canSavePdf || web == null || _status.value != RendererStatus.ready) return null;
+    return web.createPdf();
   }
 
   @override

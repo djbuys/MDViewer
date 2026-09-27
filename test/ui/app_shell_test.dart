@@ -72,6 +72,19 @@ void main() {
     expect(find.byType(FileSidebar), findsOneWidget);
   });
 
+  testWidgets('the renderer view (the WebView) survives layout changes', (tester) async {
+    final h = await pumpApp(tester, const Size(1280, 800));
+    final view = tester.element(find.byKey(const ValueKey('fake-renderer')));
+    await openFolder(tester, h);
+    expect(tester.element(find.byKey(const ValueKey('fake-renderer'))), same(view));
+    await tester.tap(find.byKey(const Key('action-toggle-sidebar')));
+    await tester.pumpAndSettle();
+    expect(tester.element(find.byKey(const ValueKey('fake-renderer'))), same(view));
+    tester.view.physicalSize = const Size(600, 800);
+    await tester.pumpAndSettle();
+    expect(tester.element(find.byKey(const ValueKey('fake-renderer'))), same(view));
+  });
+
   testWidgets('back and forward follow document history', (tester) async {
     final h = await pumpApp(tester, const Size(1280, 800));
     await openFolder(tester, h);

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:mdviewer/app_services.dart';
 import 'package:mdviewer/document/document_controller.dart';
@@ -20,6 +22,7 @@ class TestHarness {
     required this.access,
     required this.launcher,
     required this.source,
+    required this.sharer,
   });
 
   final AppServices services;
@@ -27,6 +30,16 @@ class TestHarness {
   final FakeDocumentAccess access;
   final FakeLauncher launcher;
   final MemoryFileSource source;
+  final FakeSharer sharer;
+
+  /// Suggested names passed to the save-location picker.
+  final List<String> saveSuggestions = [];
+
+  /// What the save-location picker answers (null = cancelled).
+  String? saveLocation;
+
+  /// Files "written" through [AppServices.writeFile].
+  final Map<String, Uint8List> writtenFiles = {};
 
   /// A folder workspace at /ws containing README.md, guide.md and docs/b.md.
   OpenRequest folderRequest() => OpenRequest(
@@ -49,6 +62,8 @@ Future<TestHarness> createHarness({IncomingFiles? incoming, bool resetPreference
   final recents = await Recents.load();
   final document = DocumentController(renderer: renderer, launcher: launcher, reloadDebounce: Duration.zero);
   final actions = OpenActions(access: access, recents: recents, document: document);
+  final sharer = FakeSharer();
+  late final TestHarness harness;
   final services = AppServices(
     settings: settings,
     recents: recents,
@@ -56,8 +71,21 @@ Future<TestHarness> createHarness({IncomingFiles? incoming, bool resetPreference
     document: document,
     actions: actions,
     incoming: incoming,
+    sharer: sharer,
+    pickSaveLocation: (name) async {
+      harness.saveSuggestions.add(name);
+      return harness.saveLocation;
+    },
+    writeFile: (path, bytes) async => harness.writtenFiles[path] = bytes,
   );
-  return TestHarness(services: services, renderer: renderer, access: access, launcher: launcher, source: source);
+  return harness = TestHarness(
+    services: services,
+    renderer: renderer,
+    access: access,
+    launcher: launcher,
+    source: source,
+    sharer: sharer,
+  );
 }
 
 Widget harnessApp(AppServices services, Widget child) => AppScope(

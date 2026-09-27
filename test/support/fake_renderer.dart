@@ -5,11 +5,19 @@ import 'package:flutter/widgets.dart';
 import 'package:mdviewer/renderer/renderer_controller.dart';
 
 class FakeRendererController implements RendererController {
-  FakeRendererController({RendererStatus initialStatus = RendererStatus.ready, this.printable = true})
+  FakeRendererController({
+    RendererStatus initialStatus = RendererStatus.ready,
+    this.printable = true,
+    this.savePdfSupported = true,
+  })
       : statusNotifier = ValueNotifier(initialStatus);
 
   final ValueNotifier<RendererStatus> statusNotifier;
   bool printable;
+  bool savePdfSupported;
+
+  /// What [createPdf] returns.
+  Uint8List? pdfBytes;
   String? reason;
   final List<String> calls = [];
   String? lastMarkdown;
@@ -48,6 +56,8 @@ class FakeRendererController implements RendererController {
   set resourceResolver(ResourceResolver? value) => resolver = value;
   @override
   bool get canPrint => printable;
+  @override
+  bool get canSavePdf => savePdfSupported;
 
   @override
   Widget buildView(BuildContext context) => const SizedBox.expand(key: ValueKey('fake-renderer'));
@@ -74,6 +84,11 @@ class FakeRendererController implements RendererController {
   Future<void> clearFind() async => calls.add('clearFind');
   @override
   Future<void> print() async => calls.add('print');
+  @override
+  Future<Uint8List?> createPdf() async {
+    calls.add('createPdf');
+    return pdfBytes;
+  }
 
   @override
   void dispose() {

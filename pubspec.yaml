@@ -41,6 +41,7 @@ dependencies:
   desktop_drop: ^0.8.4
   path: ^1.9.1
   watcher: ^1.2.1
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:

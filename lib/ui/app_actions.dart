@@ -43,6 +43,7 @@ class AppAction {
     this.priority = 0,
     this.children = const [],
     this.menuOnly = false,
+    this.anchorKey,
   });
 
   /// Keys: `action-<id>` for the title-bar button, `menu-<id>` for the
@@ -73,6 +74,10 @@ class AppAction {
   /// item and no Flutter shortcut binding.
   final bool menuOnly;
 
+  /// Put on the title-bar button so the action can find where it is on
+  /// screen (the iPad share popover anchors to it).
+  final GlobalKey? anchorKey;
+
   bool get enabled => onSelected != null || children.isNotEmpty;
   String get menuTitle => menuLabel ?? label;
 }
@@ -82,7 +87,12 @@ abstract interface class AppActionHost {
   void openFind();
   Future<void> searchFolder();
   Future<void> printDocument();
+  Future<void> savePdf();
+  Future<void> shareDocument();
   void openContentsDrawer();
+
+  /// Anchors the share button.
+  GlobalKey get shareAnchor;
 }
 
 bool _usesMeta(TargetPlatform platform) => platform == TargetPlatform.macOS || platform == TargetPlatform.iOS;
@@ -263,6 +273,26 @@ List<AppAction> buildAppActions({
         group: ActionGroup.output,
         priority: ActionPriority.output,
       ),
+    if (services.renderer.canSavePdf)
+      AppAction(
+        id: 'save-pdf',
+        label: 'Save as PDF',
+        menuLabel: 'Save as PDF…',
+        icon: Icons.picture_as_pdf_outlined,
+        onSelected: when(hasDocument, () => unawaited(host.savePdf())),
+        group: ActionGroup.output,
+        priority: ActionPriority.output,
+      ),
+    if (services.sharer.isSupported)
+      AppAction(
+        id: 'share',
+        label: 'Share',
+        icon: platform == TargetPlatform.iOS ? Icons.ios_share : Icons.share,
+        onSelected: when(hasDocument, () => unawaited(host.shareDocument())),
+        group: ActionGroup.share,
+        priority: ActionPriority.share,
+        anchorKey: host.shareAnchor,
+      ),
     AppAction(
       id: 'reload',
       label: 'Reload',
@@ -341,7 +371,7 @@ List<PlatformMenuItem> macMenus(List<AppAction> actions) {
       menus: groups([
         ['open-file', 'open-folder', 'recents'],
         ['reload'],
-        ['print'],
+        ['print', 'save-pdf'],
       ]),
     ),
     PlatformMenu(label: 'Edit', menus: items(['copy', 'select-all'])),

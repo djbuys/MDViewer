@@ -2,10 +2,12 @@
 
 A free, open-source, **read-only** Markdown viewer for macOS, Windows, Linux, iOS and Android.
 
+MDViewer never modifies your documents. The only file it ever writes for you is a PDF you export with **Save as PDF** (macOS and Windows), and only to the location you choose.
+
 - GitHub-flavoured Markdown: tables, task lists, footnotes, strikethrough, autolinks
 - Syntax-highlighted code, KaTeX maths (`$…$`, `$$…$$`, ```` ```math ````) and Mermaid diagrams
 - Open a single file or a whole folder: file tree, table of contents, relative links between files, back/forward
-- Find in page, search across a folder, print / save as PDF
+- Find in page, search across a folder, print, save as PDF (macOS, Windows), share (iOS, Android)
 - Live reload when the file changes on disk (desktop)
 - Light, dark or system theme; adjustable text size
 - Works fully offline; untrusted HTML in documents is sanitized
