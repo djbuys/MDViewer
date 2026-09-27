@@ -1,8 +1,10 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
-void main() {
-  runApp(const MaterialApp(
-    title: 'MDViewer',
-    home: Scaffold(body: Center(child: Text('MDViewer'))),
-  ));
+import 'app.dart';
+import 'app_services.dart';
+
+Future<void> main(List<String> args) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final services = await AppServices.create(args: args);
+  runApp(MdViewerApp(services: services));
 }
