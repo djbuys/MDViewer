@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../settings/recents.dart';
 import '../workspace/workspace.dart';
+import 'android_document_access.dart';
 import 'desktop_document_access.dart';
 import 'ios_document_access.dart';
 
@@ -44,5 +45,6 @@ abstract interface class DocumentAccess {
 
 DocumentAccess createDocumentAccess() {
   if (Platform.isIOS) return IosDocumentAccess();
+  if (Platform.isAndroid) return AndroidDocumentAccess();
   return DesktopDocumentAccess();
 }
