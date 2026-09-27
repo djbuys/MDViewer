@@ -4,6 +4,13 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+import java.util.Properties
+
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("key.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 android {
     namespace = "io.github.djbuys.mdviewer"
     compileSdk = flutter.compileSdkVersion
@@ -29,11 +36,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (!keystoreProperties.isEmpty) {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystoreProperties.isEmpty) {
+                signingConfigs.getByName("debug")
+            } else {
+                signingConfigs.getByName("release")
+            }
         }
     }
 }
