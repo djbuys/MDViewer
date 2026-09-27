@@ -3,18 +3,17 @@ import 'dart:async';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../app_services.dart';
 import '../platform/document_access.dart';
-import '../platform/edit_commands.dart';
 import '../search/find_bar.dart';
 import '../search/folder_search_dialog.dart';
-import '../settings/recents.dart';
 import '../settings/settings.dart';
+import 'app_actions.dart';
 import 'document_pane.dart';
 import 'file_sidebar.dart';
 import 'open_commands.dart';
+import 'title_bar.dart';
 import 'toc_panel.dart';
 
 const double wideLayoutBreakpoint = 900;
@@ -32,14 +31,12 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class _AppShellState extends State<AppShell> implements AppActionHost {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   AppLifecycleListener? _lifecycle;
   StreamSubscription<String>? _messages;
   StreamSubscription<IncomingDocument>? _incoming;
   AppServices? _services;
-  bool _sidebarVisible = true;
-  bool _tocVisible = true;
   bool _finding = false;
   String _findQuery = '';
   int _findSession = 0;
@@ -83,6 +80,9 @@ class _AppShellState extends State<AppShell> {
     services.document.setAppearance(dark: dark, fontScale: settings.fontScale);
   }
 
+  @override
+  void openFind() => _openFind();
+
   void _openFind([String query = '']) => setState(() {
         _finding = true;
         _findQuery = query;
@@ -91,7 +91,9 @@ class _AppShellState extends State<AppShell> {
 
   void _closeFind() => setState(() => _finding = false);
 
-  Future<void> _searchFolder(AppServices services) async {
+  @override
+  Future<void> searchFolder() async {
+    final services = AppScope.of(context);
     final workspace = services.document.workspace;
     if (workspace == null || !workspace.isFolder) return;
     final result = await FolderSearchDialog.show(context, workspace);
@@ -101,7 +103,9 @@ class _AppShellState extends State<AppShell> {
     if (mounted) _openFind(query);
   }
 
-  Future<void> _print(AppServices services) async {
+  @override
+  Future<void> printDocument() async {
+    final services = AppScope.of(context);
     try {
       await services.renderer.print();
     } catch (e) {
@@ -109,11 +113,8 @@ class _AppShellState extends State<AppShell> {
     }
   }
 
-  String _themeLabel(AppThemeMode mode) => switch (mode) {
-        AppThemeMode.system => 'Theme: follow system',
-        AppThemeMode.light => 'Theme: light',
-        AppThemeMode.dark => 'Theme: dark',
-      };
+  @override
+  void openContentsDrawer() => _scaffoldKey.currentState?.openEndDrawer();
 
   @override
   Widget build(BuildContext context) {
@@ -125,8 +126,19 @@ class _AppShellState extends State<AppShell> {
         return LayoutBuilder(
           builder: (context, constraints) {
             final wide = constraints.maxWidth >= wideLayoutBreakpoint;
-            Widget shell = _buildScaffold(context, services, wide: wide);
-            shell = _withShortcuts(services, shell);
+            final platform = defaultTargetPlatform;
+            final actions = buildAppActions(
+              context: context,
+              services: services,
+              host: this,
+              wide: wide,
+              platform: platform,
+            );
+            Widget shell = _buildScaffold(context, services, actions, wide: wide, platform: platform);
+            shell = CallbackShortcuts(
+              bindings: shortcutBindings(actions),
+              child: Focus(autofocus: true, child: shell),
+            );
             if (_isDesktop) {
               shell = DropTarget(
                 onDragDone: (details) {
@@ -136,8 +148,8 @@ class _AppShellState extends State<AppShell> {
                 child: shell,
               );
             }
-            if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
-              shell = _withMacMenus(services, shell);
+            if (!kIsWeb && platform == TargetPlatform.macOS) {
+              shell = PlatformMenuBar(menus: macMenus(actions), child: shell);
             }
             return shell;
           },
@@ -146,8 +158,15 @@ class _AppShellState extends State<AppShell> {
     );
   }
 
-  Widget _buildScaffold(BuildContext context, AppServices services, {required bool wide}) {
+  Widget _buildScaffold(
+    BuildContext context,
+    AppServices services,
+    List<AppAction> actions, {
+    required bool wide,
+    required TargetPlatform platform,
+  }) {
     final document = services.document;
+    final settings = services.settings;
     final hasFolder = document.workspace?.isFolder ?? false;
     final hasHeadings = document.headings.isNotEmpty;
     final body = Column(
@@ -162,13 +181,24 @@ class _AppShellState extends State<AppShell> {
         const Expanded(child: DocumentPane()),
       ],
     );
+    final filesDrawer = !wide && hasFolder;
     return Scaffold(
       key: _scaffoldKey,
-      appBar: AppBar(
-        title: Text(document.title, overflow: TextOverflow.ellipsis),
-        actions: _actions(context, services, wide: wide),
+      appBar: MdTitleBar(
+        title: document.title,
+        actions: actions,
+        platform: platform,
+        wide: wide,
+        leading: filesDrawer
+            ? IconButton(
+                key: const Key('action-files'),
+                tooltip: 'Files',
+                icon: const Icon(Icons.menu),
+                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              )
+            : null,
       ),
-      drawer: !wide && hasFolder
+      drawer: filesDrawer
           ? Drawer(child: SafeArea(child: FileSidebar(onOpened: () => _scaffoldKey.currentState?.closeDrawer())))
           : null,
       endDrawer: !wide && hasHeadings
@@ -177,12 +207,12 @@ class _AppShellState extends State<AppShell> {
       body: wide
           ? Row(
               children: [
-                if (hasFolder && _sidebarVisible) ...[
+                if (hasFolder && settings.sidebarVisible) ...[
                   const SizedBox(width: 280, child: FileSidebar()),
                   const VerticalDivider(width: 1),
                 ],
                 Expanded(child: body),
-                if (hasHeadings && _tocVisible) ...[
+                if (hasHeadings && settings.tocVisible) ...[
                   const VerticalDivider(width: 1),
                   const SizedBox(width: 240, child: TocPanel()),
                 ],
@@ -191,309 +221,4 @@ class _AppShellState extends State<AppShell> {
           : body,
     );
   }
-
-  List<Widget> _actions(BuildContext context, AppServices services, {required bool wide}) {
-    final document = services.document;
-    final hasDocument = document.currentPath != null;
-    final hasFolder = document.workspace?.isFolder ?? false;
-    return [
-      if (wide) ...[
-        IconButton(
-          key: const Key('action-back'),
-          tooltip: 'Back',
-          icon: const Icon(Icons.arrow_back),
-          onPressed: document.canGoBack ? () => unawaited(document.goBack()) : null,
-        ),
-        IconButton(
-          key: const Key('action-forward'),
-          tooltip: 'Forward',
-          icon: const Icon(Icons.arrow_forward),
-          onPressed: document.canGoForward ? () => unawaited(document.goForward()) : null,
-        ),
-        IconButton(
-          key: const Key('action-open-file'),
-          tooltip: 'Open file',
-          icon: const Icon(Icons.file_open_outlined),
-          onPressed: () => openFileCommand(context),
-        ),
-        IconButton(
-          key: const Key('action-open-folder'),
-          tooltip: 'Open folder',
-          icon: const Icon(Icons.folder_open_outlined),
-          onPressed: () => openFolderCommand(context),
-        ),
-        if (services.recents.entries.isNotEmpty)
-          PopupMenuButton<RecentEntry>(
-            key: const Key('action-recents'),
-            tooltip: 'Recent',
-            icon: const Icon(Icons.history),
-            onSelected: (entry) => openRecentCommand(context, entry),
-            itemBuilder: (_) => [
-              for (final entry in services.recents.entries)
-                PopupMenuItem(value: entry, child: Text(entry.displayName)),
-            ],
-          ),
-      ],
-      if (hasDocument)
-        IconButton(
-          key: const Key('action-find'),
-          tooltip: 'Find in document',
-          icon: const Icon(Icons.search),
-          onPressed: _openFind,
-        ),
-      if (wide && hasFolder)
-        IconButton(
-          key: const Key('action-search-folder'),
-          tooltip: 'Search folder',
-          icon: const Icon(Icons.manage_search),
-          onPressed: () => unawaited(_searchFolder(services)),
-        ),
-      if (wide && hasFolder)
-        IconButton(
-          key: const Key('action-toggle-sidebar'),
-          tooltip: _sidebarVisible ? 'Hide files' : 'Show files',
-          icon: const Icon(Icons.vertical_split_outlined),
-          onPressed: () => setState(() => _sidebarVisible = !_sidebarVisible),
-        ),
-      if (wide && document.headings.isNotEmpty)
-        IconButton(
-          key: const Key('action-toggle-toc'),
-          tooltip: _tocVisible ? 'Hide contents' : 'Show contents',
-          icon: const Icon(Icons.toc),
-          onPressed: () => setState(() => _tocVisible = !_tocVisible),
-        ),
-      if (!wide && document.headings.isNotEmpty)
-        IconButton(
-          key: const Key('action-contents'),
-          tooltip: 'Contents',
-          icon: const Icon(Icons.toc),
-          onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-        ),
-      _overflowMenu(context, services, wide: wide),
-    ];
-  }
-
-  Widget _overflowMenu(BuildContext context, AppServices services, {required bool wide}) {
-    final document = services.document;
-    final settings = services.settings;
-    final hasFolder = document.workspace?.isFolder ?? false;
-    return PopupMenuButton<VoidCallback>(
-      key: const Key('action-more'),
-      tooltip: 'More',
-      onSelected: (action) => action(),
-      itemBuilder: (_) => [
-        if (!wide) ...[
-          PopupMenuItem(
-            key: const Key('menu-open-file'),
-            value: () => openFileCommand(context),
-            child: const Text('Open file…'),
-          ),
-          PopupMenuItem(
-            key: const Key('menu-open-folder'),
-            value: () => openFolderCommand(context),
-            child: const Text('Open folder…'),
-          ),
-          for (final entry in services.recents.entries.take(5))
-            PopupMenuItem(
-              value: () => openRecentCommand(context, entry),
-              child: Text('Recent: ${entry.displayName}', overflow: TextOverflow.ellipsis),
-            ),
-          if (hasFolder)
-            PopupMenuItem(
-              value: () => unawaited(_searchFolder(services)),
-              child: const Text('Search folder…'),
-            ),
-          if (document.canGoBack) PopupMenuItem(value: () => unawaited(document.goBack()), child: const Text('Back')),
-          if (document.canGoForward)
-            PopupMenuItem(value: () => unawaited(document.goForward()), child: const Text('Forward')),
-          const PopupMenuDivider(),
-        ],
-        PopupMenuItem(
-          key: const Key('menu-theme'),
-          value: () => unawaited(settings.cycleThemeMode()),
-          child: Text(_themeLabel(settings.themeMode)),
-        ),
-        PopupMenuItem(
-          key: const Key('menu-font-up'),
-          value: () => unawaited(settings.increaseFontScale()),
-          child: const Text('Larger text'),
-        ),
-        PopupMenuItem(
-          key: const Key('menu-font-down'),
-          value: () => unawaited(settings.decreaseFontScale()),
-          child: const Text('Smaller text'),
-        ),
-        PopupMenuItem(
-          key: const Key('menu-font-reset'),
-          value: () => unawaited(settings.resetFontScale()),
-          child: Text('Reset text size (${(settings.fontScale * 100).round()}%)'),
-        ),
-        if (document.currentPath != null) ...[
-          PopupMenuItem(
-            key: const Key('menu-reload'),
-            value: () => unawaited(document.reload()),
-            child: const Text('Reload'),
-          ),
-          if (services.renderer.canPrint)
-            PopupMenuItem(
-              key: const Key('menu-print'),
-              value: () => unawaited(_print(services)),
-              child: const Text('Print / Save as PDF…'),
-            ),
-        ],
-      ],
-    );
-  }
-
-  Widget _withShortcuts(AppServices services, Widget child) {
-    final mac = defaultTargetPlatform == TargetPlatform.macOS || defaultTargetPlatform == TargetPlatform.iOS;
-    SingleActivator key(LogicalKeyboardKey k, {bool shift = false}) =>
-        SingleActivator(k, meta: mac, control: !mac, shift: shift);
-    final document = services.document;
-    return CallbackShortcuts(
-      bindings: {
-        key(LogicalKeyboardKey.keyO): () => openFileCommand(context),
-        key(LogicalKeyboardKey.keyO, shift: true): () => openFolderCommand(context),
-        key(LogicalKeyboardKey.keyF): () {
-          if (document.currentPath != null) _openFind();
-        },
-        key(LogicalKeyboardKey.keyF, shift: true): () => unawaited(_searchFolder(services)),
-        key(LogicalKeyboardKey.keyP): () {
-          if (document.currentPath != null && services.renderer.canPrint) unawaited(_print(services));
-        },
-        key(LogicalKeyboardKey.keyR): () => unawaited(document.reload()),
-        key(LogicalKeyboardKey.equal): () => unawaited(services.settings.increaseFontScale()),
-        key(LogicalKeyboardKey.minus): () => unawaited(services.settings.decreaseFontScale()),
-        key(LogicalKeyboardKey.digit0): () => unawaited(services.settings.resetFontScale()),
-        key(LogicalKeyboardKey.bracketLeft): () => unawaited(document.goBack()),
-        key(LogicalKeyboardKey.bracketRight): () => unawaited(document.goForward()),
-      },
-      child: Focus(autofocus: true, child: child),
-    );
-  }
-
-  /// macOS menu bar items work even while the WebView has keyboard focus.
-  Widget _withMacMenus(AppServices services, Widget child) {
-    final document = services.document;
-    final settings = services.settings;
-    return PlatformMenuBar(
-      menus: [
-        PlatformMenu(
-          label: 'MDViewer',
-          menus: [
-            ..._provided([PlatformProvidedMenuItemType.about]),
-            PlatformMenuItemGroup(members: _provided([PlatformProvidedMenuItemType.servicesSubmenu])),
-            PlatformMenuItemGroup(
-              members: _provided([
-                PlatformProvidedMenuItemType.hide,
-                PlatformProvidedMenuItemType.hideOtherApplications,
-                PlatformProvidedMenuItemType.showAllApplications,
-              ]),
-            ),
-            ..._provided([PlatformProvidedMenuItemType.quit]),
-          ],
-        ),
-        PlatformMenu(
-          label: 'File',
-          menus: [
-            PlatformMenuItem(
-              label: 'Open File…',
-              shortcut: const SingleActivator(LogicalKeyboardKey.keyO, meta: true),
-              onSelected: () => openFileCommand(context),
-            ),
-            PlatformMenuItem(
-              label: 'Open Folder…',
-              shortcut: const SingleActivator(LogicalKeyboardKey.keyO, meta: true, shift: true),
-              onSelected: () => openFolderCommand(context),
-            ),
-            PlatformMenuItem(
-              label: 'Reload',
-              shortcut: const SingleActivator(LogicalKeyboardKey.keyR, meta: true),
-              onSelected: document.currentPath == null ? null : () => unawaited(document.reload()),
-            ),
-            PlatformMenuItem(
-              label: 'Print…',
-              shortcut: const SingleActivator(LogicalKeyboardKey.keyP, meta: true),
-              onSelected: document.currentPath == null ? null : () => unawaited(_print(services)),
-            ),
-          ],
-        ),
-        PlatformMenu(
-          label: 'Edit',
-          menus: [
-            PlatformMenuItem(
-              label: 'Copy',
-              shortcut: const SingleActivator(LogicalKeyboardKey.keyC, meta: true),
-              onSelected: () => unawaited(const EditCommands().copy()),
-            ),
-            PlatformMenuItem(
-              label: 'Select All',
-              shortcut: const SingleActivator(LogicalKeyboardKey.keyA, meta: true),
-              onSelected: () => unawaited(const EditCommands().selectAll()),
-            ),
-          ],
-        ),
-        PlatformMenu(
-          label: 'View',
-          menus: [
-            PlatformMenuItem(
-              label: 'Find…',
-              shortcut: const SingleActivator(LogicalKeyboardKey.keyF, meta: true),
-              onSelected: document.currentPath == null ? null : _openFind,
-            ),
-            PlatformMenuItem(
-              label: 'Search Folder…',
-              shortcut: const SingleActivator(LogicalKeyboardKey.keyF, meta: true, shift: true),
-              onSelected: (document.workspace?.isFolder ?? false) ? () => unawaited(_searchFolder(services)) : null,
-            ),
-            PlatformMenuItem(
-              label: 'Back',
-              shortcut: const SingleActivator(LogicalKeyboardKey.bracketLeft, meta: true),
-              onSelected: document.canGoBack ? () => unawaited(document.goBack()) : null,
-            ),
-            PlatformMenuItem(
-              label: 'Forward',
-              shortcut: const SingleActivator(LogicalKeyboardKey.bracketRight, meta: true),
-              onSelected: document.canGoForward ? () => unawaited(document.goForward()) : null,
-            ),
-            PlatformMenuItem(
-              label: 'Larger Text',
-              shortcut: const SingleActivator(LogicalKeyboardKey.equal, meta: true),
-              onSelected: () => unawaited(settings.increaseFontScale()),
-            ),
-            PlatformMenuItem(
-              label: 'Smaller Text',
-              shortcut: const SingleActivator(LogicalKeyboardKey.minus, meta: true),
-              onSelected: () => unawaited(settings.decreaseFontScale()),
-            ),
-            PlatformMenuItem(
-              label: 'Actual Size',
-              shortcut: const SingleActivator(LogicalKeyboardKey.digit0, meta: true),
-              onSelected: () => unawaited(settings.resetFontScale()),
-            ),
-            PlatformMenuItem(
-              label: _themeLabel(settings.themeMode),
-              onSelected: () => unawaited(settings.cycleThemeMode()),
-            ),
-          ],
-        ),
-        PlatformMenu(
-          label: 'Window',
-          menus: _provided([
-            PlatformProvidedMenuItemType.minimizeWindow,
-            PlatformProvidedMenuItemType.zoomWindow,
-            PlatformProvidedMenuItemType.toggleFullScreen,
-            PlatformProvidedMenuItemType.arrangeWindowsInFront,
-          ]),
-        ),
-      ],
-      child: child,
-    );
-  }
-
-  /// The platform-provided menu items this OS actually offers.
-  static List<PlatformMenuItem> _provided(List<PlatformProvidedMenuItemType> types) => [
-        for (final type in types)
-          if (PlatformProvidedMenuItem.hasMenu(type)) PlatformProvidedMenuItem(type: type),
-      ];
 }

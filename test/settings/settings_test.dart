@@ -47,4 +47,24 @@ void main() {
     expect(settings.themeMode, AppThemeMode.system);
     expect(settings.fontScale, Settings.maxFontScale);
   });
+
+  test('files sidebar and contents panel default to visible and persist', () async {
+    final settings = await Settings.load();
+    expect(settings.sidebarVisible, isTrue);
+    expect(settings.tocVisible, isTrue);
+    var notified = 0;
+    settings.addListener(() => notified++);
+    await settings.toggleSidebar();
+    await settings.toggleToc();
+    expect(settings.sidebarVisible, isFalse);
+    expect(settings.tocVisible, isFalse);
+    expect(notified, 2);
+
+    final reloaded = await Settings.load();
+    expect(reloaded.sidebarVisible, isFalse);
+    expect(reloaded.tocVisible, isFalse);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('sidebarVisible'), isFalse);
+    expect(prefs.getBool('tocVisible'), isFalse);
+  });
 }

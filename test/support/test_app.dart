@@ -35,8 +35,9 @@ class TestHarness {
       );
 }
 
-Future<TestHarness> createHarness({IncomingFiles? incoming}) async {
-  SharedPreferences.setMockInitialValues({});
+/// [resetPreferences] false keeps what an earlier harness saved (a relaunch).
+Future<TestHarness> createHarness({IncomingFiles? incoming, bool resetPreferences = true}) async {
+  if (resetPreferences) SharedPreferences.setMockInitialValues({});
   final source = MemoryFileSource()
     ..addText('/ws/README.md', '# Readme\n\nSee [guide](guide.md).')
     ..addText('/ws/guide.md', '# Guide')
