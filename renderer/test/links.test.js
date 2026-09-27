@@ -31,6 +31,23 @@ test('image-map areas are routed too', () => {
   assert.equal(linkHrefFromEvent(doc.getElementById('area')), 'evil.html');
 });
 
+test('a nested anchor without a target does not stop the walk to the outer link', () => {
+  const doc = page('<a id="outer" href="//x/y"><svg><a id="inner"><text id="t">t</text></a></svg></a>');
+  assert.equal(doc.getElementById('inner').namespaceURI, 'http://www.w3.org/2000/svg');
+  assert.equal(linkHrefFromEvent(doc.getElementById('t')), '//x/y');
+  assert.equal(linkHrefFromEvent(doc.getElementById('t').firstChild), '//x/y');
+  assert.equal(linkHrefFromEvent(doc.getElementById('inner')), '//x/y');
+});
+
+test('the nearest link with a target wins', () => {
+  const doc = page(
+    '<a href="outer.md"><svg><a href="inner.md"><text id="t">t</text></a></svg></a>' +
+      '<p><a name="x"><span id="named">n</span></a></p>',
+  );
+  assert.equal(linkHrefFromEvent(doc.getElementById('t')), 'inner.md');
+  assert.equal(linkHrefFromEvent(doc.getElementById('named')), null);
+});
+
 test('clicks outside links, and anchors without a target, report null', () => {
   const doc = page('<p id="p">text <a id="named" name="x">anchor</a></p>');
   assert.equal(linkHrefFromEvent(doc.getElementById('p')), null);

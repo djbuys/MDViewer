@@ -207,6 +207,67 @@ void main() {
     expect(isBlockedExecutable('/x/Makefile'), isFalse);
   });
 
+  test('the denylist also covers scripts, shortcuts and launcher files', () {
+    for (final ext in [
+      '.hta', '.cpl', '.msc', '.pif', '.scf', '.vbe', '.wsh', '.py', '.pyw', '.pl', '.rb', '.appref-ms', //
+      '.application', '.jnlp', '.settingcontent-ms', '.url', '.website', '.tool', '.terminal', '.workflow',
+      '.action', '.scpt', '.applescript', '.osx', '.inetloc', '.fileloc', '.webloc', '.desktop',
+    ]) {
+      expect(isBlockedExecutable('/x/file$ext'), isTrue, reason: ext);
+      expect(isBlockedExecutable('/x/FILE${ext.toUpperCase()}'), isTrue, reason: ext);
+    }
+  });
+
+  group('launch policy', () {
+    test('on macOS/Linux, files without an extension are refused', () async {
+      const posix = LaunchPolicy(posixChecks: true);
+      expect(await posix.blocks('/x/Makefile'), isTrue);
+      expect(await posix.blocks('/x/.profile'), isTrue);
+      expect(await posix.blocks('/x/notes.txt'), isFalse);
+      expect(await posix.blocks('/x/run.sh'), isTrue);
+      const other = LaunchPolicy(posixChecks: false);
+      expect(await other.blocks('/x/Makefile'), isFalse);
+      expect(await other.blocks('/x/run.sh'), isTrue);
+    });
+
+    test('on macOS/Linux, files with any execute bit are refused', () async {
+      final dir = await Directory.systemTemp.createTemp('mdv_exec');
+      addTearDown(() => dir.delete(recursive: true));
+      final plain = File(p.join(dir.path, 'notes.txt'))..writeAsStringSync('text');
+      final script = File(p.join(dir.path, 'innocent.txt'))..writeAsStringSync('#!/bin/sh\necho hi');
+      final groupOnly = File(p.join(dir.path, 'group.txt'))..writeAsStringSync('x');
+      expect((await Process.run('chmod', ['u+x', script.path])).exitCode, 0);
+      expect((await Process.run('chmod', ['g+x', groupOnly.path])).exitCode, 0);
+      const posix = LaunchPolicy(posixChecks: true);
+      expect(await posix.blocks(plain.path), isFalse);
+      expect(await posix.blocks(script.path), isTrue);
+      expect(await posix.blocks(groupOnly.path), isTrue);
+    }, skip: Platform.isWindows);
+
+    test('the host policy does the POSIX checks on macOS and Linux only', () {
+      expect(LaunchPolicy.forHost().posixChecks, Platform.isMacOS || Platform.isLinux);
+    });
+
+    test('links to extensionless files are blocked with the POSIX policy', () async {
+      final strict = DocumentController(
+        renderer: renderer,
+        launcher: launcher,
+        reloadDebounce: Duration.zero,
+        launchPolicy: const LaunchPolicy(posixChecks: true),
+      );
+      addTearDown(strict.dispose);
+      source.addText('/ws/tools/install', '#!/bin/sh');
+      await strict.openWorkspace(workspace);
+      final messages = <String>[];
+      strict.messages.listen(messages.add);
+      await strict.handleLink('tools/install');
+      await strict.handleLink('docs/notes.txt');
+      await settle();
+      expect(launcher.opened, ['/ws/docs/notes.txt']);
+      expect(messages, ['Opening install is blocked for safety']);
+    });
+  });
+
   test('unsupported links report a message', () async {
     await controller.openWorkspace(workspace);
     final messages = <String>[];

@@ -85,6 +85,18 @@ class WebViewRendererController implements RendererController {
     return _onPageLoaded();
   }
 
+  /// Runs the load-stop logic for [url] against [evaluate] and
+  /// [reloadRenderer] instead of a live WebView.
+  @visibleForTesting
+  Future<void> debugHandleLoadStop(
+    Uri? url, {
+    required JsEvaluator evaluate,
+    required Future<void> Function() reloadRenderer,
+  }) {
+    _evaluate = evaluate;
+    return _handleLoadStop(url, reloadRenderer);
+  }
+
   /// Handler calls are served only for the renderer page's main frame.
   bool _acceptsCall(JavaScriptHandlerFunctionData data) =>
       _policy.acceptsHandlerCall(isMainFrame: data.isMainFrame, requestUrl: data.requestUrl);
@@ -143,9 +155,44 @@ class WebViewRendererController implements RendererController {
     );
   }
 
-  Future<void> _onLoadStop(InAppWebViewController web, Uri? url) async {
-    if (url != null && !_policy.allowNavigation(url)) return;
+  Future<void> _onLoadStop(InAppWebViewController web, Uri? url) =>
+      _handleLoadStop(url, () => web.loadFile(assetFilePath: rendererAssetPath));
+
+  /// Consecutive foreign page loads replaced without the renderer page
+  /// loading in between; guards against a reload loop.
+  int _recoveries = 0;
+  static const _maxRecoveries = 3;
+
+  Future<void> _handleLoadStop(Uri? url, Future<void> Function() reloadRenderer) async {
+    if (url != null && !_policy.allowNavigation(url)) {
+      await _recoverFromForeignPage(reloadRenderer);
+      return;
+    }
+    _recoveries = 0;
     await _onPageLoaded();
+  }
+
+  /// Some other main-frame page finished loading (navigation is cancelled
+  /// for everything but the renderer page, so this should never happen).
+  /// Put the renderer page back; the normal ready path then replays the last
+  /// render. Nothing is evaluated in the foreign page.
+  Future<void> _recoverFromForeignPage(Future<void> Function() reloadRenderer) async {
+    if (_status.value == RendererStatus.unavailable) return;
+    if (++_recoveries > _maxRecoveries) {
+      markUnavailable();
+      return;
+    }
+    if (_status.value == RendererStatus.ready) {
+      _status.value = RendererStatus.loading;
+      _pending ??= _last;
+    }
+    startReadyTimer();
+    try {
+      await reloadRenderer();
+    } catch (e) {
+      debugPrint('Could not reload the renderer page: $e');
+      markUnavailable();
+    }
   }
 
   Future<void> _onPageLoaded() async {

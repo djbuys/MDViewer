@@ -92,6 +92,55 @@ void main() {
       expect(calls.where((c) => c.contains('mdv.render')), isEmpty);
     });
 
+    group('a foreign main-frame page', () {
+      final rendererUrl = Uri.parse('file:///app/flutter_assets/assets/renderer/index.html');
+      final evil = Uri.parse('https://evil.example/page');
+      late int reloads;
+      Future<void> reload() async => reloads++;
+
+      setUp(() => reloads = 0);
+
+      test('is replaced by the renderer page, which then replays the last render', () async {
+        final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
+        addTearDown(renderer.dispose);
+        await renderer.debugHandleLoadStop(rendererUrl, evaluate: evaluate, reloadRenderer: reload);
+        expect(renderer.status.value, RendererStatus.ready);
+        await renderer.render('# A', options);
+        expect(reloads, 0);
+
+        calls.clear();
+        await renderer.debugHandleLoadStop(evil, evaluate: evaluate, reloadRenderer: reload);
+        expect(reloads, 1);
+        expect(renderer.status.value, RendererStatus.loading);
+        expect(calls, isEmpty, reason: 'nothing is evaluated in the foreign page');
+
+        await renderer.debugHandleLoadStop(rendererUrl, evaluate: evaluate, reloadRenderer: reload);
+        expect(renderer.status.value, RendererStatus.ready);
+        expect(calls.last, replayed);
+      });
+
+      test('is replaced even before the renderer page was ever captured', () async {
+        final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
+        addTearDown(renderer.dispose);
+        await renderer.debugHandleLoadStop(evil, evaluate: evaluate, reloadRenderer: reload);
+        expect(reloads, 1);
+        expect(calls, isEmpty);
+        await renderer.debugHandleLoadStop(rendererUrl, evaluate: evaluate, reloadRenderer: reload);
+        expect(renderer.status.value, RendererStatus.ready);
+      });
+
+      test('that keeps coming back makes the renderer unavailable instead of looping', () async {
+        final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
+        addTearDown(renderer.dispose);
+        await renderer.debugHandleLoadStop(rendererUrl, evaluate: evaluate, reloadRenderer: reload);
+        for (var i = 0; i < 5; i++) {
+          await renderer.debugHandleLoadStop(evil, evaluate: evaluate, reloadRenderer: reload);
+        }
+        expect(reloads, 3);
+        expect(renderer.status.value, RendererStatus.unavailable);
+      });
+    });
+
     test('a page without the renderer API makes the renderer unavailable', () async {
       final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
       addTearDown(renderer.dispose);

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show File, FileSystemEntityType, Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -34,9 +35,44 @@ const Set<String> blockedExecutableExtensions = {
   // Cross-platform / macOS / Linux
   '.jar', '.app', '.command', '.sh', '.bash', '.zsh', '.csh', '.pkg', '.dmg', '.desktop', '.run', '.bin',
   '.appimage', '.deb', '.rpm', '.apk',
+  // Windows scripts, shortcuts and launchers
+  '.hta', '.cpl', '.msc', '.pif', '.scf', '.vbe', '.wsh', '.appref-ms', '.application', '.settingcontent-ms',
+  '.url', '.website',
+  // Interpreted scripts
+  '.py', '.pyw', '.pl', '.rb', '.jnlp',
+  // macOS scripts, workflows and location/launcher files
+  '.tool', '.terminal', '.workflow', '.action', '.scpt', '.applescript', '.osx', '.inetloc', '.fileloc', '.webloc',
 };
 
 bool isBlockedExecutable(String path) => blockedExecutableExtensions.contains(p.extension(path).toLowerCase());
+
+/// Decides whether a linked file may be handed to the OS to open.
+///
+/// Always refuses [blockedExecutableExtensions]. With [posixChecks] (macOS
+/// and Linux, where any file can be made executable) it also refuses files
+/// without an extension and files with any execute permission bit set.
+class LaunchPolicy {
+  const LaunchPolicy({required this.posixChecks});
+
+  factory LaunchPolicy.forHost() => LaunchPolicy(posixChecks: !kIsWeb && (Platform.isMacOS || Platform.isLinux));
+
+  final bool posixChecks;
+
+  /// Owner, group or other execute bits (0o111).
+  static const _anyExecuteBit = 0x49;
+
+  Future<bool> blocks(String path) async {
+    if (isBlockedExecutable(path)) return true;
+    if (!posixChecks) return false;
+    if (p.extension(path).isEmpty) return true;
+    try {
+      final stat = await File(path).stat();
+      return stat.type != FileSystemEntityType.notFound && stat.mode & _anyExecuteBit != 0;
+    } catch (_) {
+      return true;
+    }
+  }
+}
 
 /// The open workspace and document: loading, history, link routing,
 /// resource resolution and live reload. UI listens to this.
@@ -48,7 +84,8 @@ class DocumentController extends ChangeNotifier {
     this.largeFileBytes = 5 * 1024 * 1024,
     this.hugeFileBytes = 50 * 1024 * 1024,
     this.maxImageBytes = 20 * 1024 * 1024,
-  }) {
+    LaunchPolicy? launchPolicy,
+  }) : launchPolicy = launchPolicy ?? LaunchPolicy.forHost() {
     renderer.resourceResolver = resolveResource;
     _subscriptions.addAll([
       renderer.headings.listen(_onHeadings),
@@ -63,6 +100,9 @@ class DocumentController extends ChangeNotifier {
   final Duration reloadDebounce;
   final int largeFileBytes;
   final int hugeFileBytes;
+
+  /// Which linked files may be opened with the system.
+  final LaunchPolicy launchPolicy;
 
   /// Larger images are not resolved.
   final int maxImageBytes;
@@ -208,8 +248,8 @@ class DocumentController extends ChangeNotifier {
         final name = workspace.source.pathContext.basename(file);
         // Check the link target too: `report.txt` may be a symlink to a
         // script, or to a file outside the workspace.
-        if (isBlockedExecutable(file) ||
-            isBlockedExecutable(await workspace.source.realPath(file)) ||
+        if (await launchPolicy.blocks(file) ||
+            await launchPolicy.blocks(await workspace.source.realPath(file)) ||
             !await workspace.containsRealPath(file)) {
           _messages.add('Opening $name is blocked for safety');
         } else if (!launcher.canOpenFiles) {
