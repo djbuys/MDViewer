@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.util.Log
+import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
@@ -48,10 +50,17 @@ class DocumentsChannel(private val activity: Activity, messenger: BinaryMessenge
         if (intent?.action != Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
         intent.action = null // handle once, even if the activity is recreated
-        background({ copyToCache(uri) }, { path ->
-            val document = mapOf("path" to path)
-            if (dartReady) incoming.invokeMethod("open", listOf(document)) else pendingIncoming.add(document)
-        })
+        background(
+            { copyToCache(uri) },
+            { path ->
+                val document = mapOf("path" to path)
+                if (dartReady) incoming.invokeMethod("open", listOf(document)) else pendingIncoming.add(document)
+            },
+            { error ->
+                Log.w("MDViewer", "Could not open incoming document $uri", error)
+                Toast.makeText(activity, "Could not open file", Toast.LENGTH_LONG).show()
+            },
+        )
     }
 
     fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
