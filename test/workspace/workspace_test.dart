@@ -1,5 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mdviewer/workspace/io_file_source.dart';
 import 'package:mdviewer/workspace/workspace.dart';
+
+import 'package:path/path.dart' as p;
 
 import '../support/memory_file_source.dart';
 
@@ -100,5 +105,29 @@ void main() {
 
   test('relative path is shown relative to the root', () {
     expect(folder.relativePath('/ws/docs/b.md'), 'docs/b.md');
+  });
+
+  test('real-path containment uses the source as-is for virtual sources', () async {
+    expect(await folder.containsRealPath('/ws/docs/b.md'), isTrue);
+    expect(await folder.containsRealPath('/elsewhere/x.md'), isFalse);
+  });
+
+  test('real-path containment rejects symbolic links that escape the root', () async {
+    final temp = await Directory.systemTemp.createTemp('mdv_ws_links');
+    addTearDown(() => temp.delete(recursive: true));
+    final ws = await Directory(p.join(temp.path, 'ws')).create();
+    final outside = await Directory(p.join(temp.path, 'outside')).create();
+    File(p.join(outside.path, 'secret.md')).writeAsStringSync('secret');
+    File(p.join(ws.path, 'a.md')).writeAsStringSync('# A');
+    Link(p.join(ws.path, 'leak.md')).createSync(p.join(outside.path, 'secret.md'));
+    Link(p.join(ws.path, 'alias.md')).createSync(p.join(ws.path, 'a.md'));
+    Link(p.join(ws.path, 'linked-dir')).createSync(outside.path);
+
+    final workspace = Workspace.folder(source: IoFileSource(), root: ws.path);
+    expect(await workspace.containsRealPath(p.join(ws.path, 'a.md')), isTrue);
+    expect(await workspace.containsRealPath(p.join(ws.path, 'alias.md')), isTrue);
+    expect(await workspace.containsRealPath(p.join(ws.path, 'leak.md')), isFalse);
+    expect(await workspace.containsRealPath(p.join(ws.path, 'linked-dir', 'secret.md')), isFalse);
+    expect(workspace.contains(p.join(ws.path, 'leak.md')), isTrue, reason: 'lexical check alone is not enough');
   });
 }

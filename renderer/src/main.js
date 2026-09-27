@@ -2,6 +2,7 @@ import DOMPurify from 'dompurify';
 import { renderMarkdown } from './markdown.js';
 import { Finder } from './find.js';
 import { detachRelativeImages, resolveImages } from './images.js';
+import { linkHrefFromEvent } from './links.js';
 
 const content = document.getElementById('content');
 const finder = new Finder(content);
@@ -86,12 +87,12 @@ async function render(markdown, options = {}) {
   }
 }
 
-// Every link click goes to the host; the WebView itself never navigates.
+// Every link click (HTML or SVG) goes to the host; the WebView itself never navigates.
 document.addEventListener('click', (event) => {
-  const anchor = event.target.closest('a[href]');
-  if (!anchor) return;
+  const href = linkHrefFromEvent(event.target);
+  if (href === null) return;
   event.preventDefault();
-  callHost('linkClicked', { href: anchor.getAttribute('href') });
+  callHost('linkClicked', { href });
 });
 
 function reportFind(result) {

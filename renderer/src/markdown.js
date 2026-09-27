@@ -80,8 +80,9 @@ export function createMarkdown({ heavyFeatures = true } = {}) {
 }
 
 // `style` attributes are intentionally allowed: KaTeX layout depends on them.
+// Image maps are forbidden: `<area href>` would navigate the WebView natively.
 export const PURIFY_CONFIG = {
-  FORBID_TAGS: ['style', 'iframe', 'object', 'embed', 'form', 'base', 'meta', 'link'],
+  FORBID_TAGS: ['style', 'iframe', 'object', 'embed', 'form', 'base', 'meta', 'link', 'map', 'area'],
 };
 
 export function renderMarkdown(text, { purify, heavyFeatures = true }) {

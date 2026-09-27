@@ -21,6 +21,10 @@ class SafFileSource implements FileSource {
   @override
   Stream<void> watch(String path) => const Stream.empty();
 
+  /// SAF documents have no symbolic links.
+  @override
+  Future<String> realPath(String path) async => path;
+
   Map<String, Object?> _args(String path) => {'treeUri': treeUri, 'path': path};
 
   @override

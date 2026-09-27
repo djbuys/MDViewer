@@ -44,6 +44,11 @@ abstract interface class FileSource {
   /// Returns null when [path] does not exist.
   Future<FileStat?> stat(String path);
 
+  /// [path] with symbolic links resolved, or [path] itself when it does not
+  /// exist or the source has no links. Used to keep workspace access inside
+  /// the workspace root even through links.
+  Future<String> realPath(String path);
+
   /// Emits whenever [path] may have changed, including deletion and
   /// re-creation. Never emits errors.
   Stream<void> watch(String path);

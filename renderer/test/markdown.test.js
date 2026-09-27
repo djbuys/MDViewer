@@ -96,6 +96,15 @@ test('sanitizes scripts, event handlers, javascript: URLs and frames', () => {
   assert.ok(!html.includes('<style'));
 });
 
+test('image maps are stripped so every link goes through the click handler', () => {
+  const { html } = render(
+    '<map name="m"><area href="https://evil.example" shape="rect" coords="0,0,10,10"></map>\n\n<img src="x.png" usemap="#m">\n',
+  );
+  assert.ok(!/<map/i.test(html));
+  assert.ok(!/<area/i.test(html));
+  assert.ok(!html.includes('evil.example'));
+});
+
 test('keeps relative image and link URLs for the host to resolve', () => {
   const { html } = render('![pic](img/a.png)\n\n[next](other.md#part)\n');
   assert.ok(html.includes('<img src="img/a.png" alt="pic">'));

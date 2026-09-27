@@ -1,10 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mdviewer/document/document_controller.dart';
 import 'package:mdviewer/renderer/renderer_controller.dart';
+import 'package:mdviewer/workspace/io_file_source.dart';
 import 'package:mdviewer/workspace/workspace.dart';
+import 'package:path/path.dart' as p;
 
 import '../support/fake_renderer.dart';
 import '../support/fakes.dart';
@@ -31,6 +34,7 @@ void main() {
       reloadDebounce: Duration.zero,
       largeFileBytes: 100,
       hugeFileBytes: 1000,
+      maxImageBytes: 50,
     );
     workspace = Workspace.folder(source: source, root: '/ws');
   });
@@ -188,6 +192,23 @@ void main() {
     expect(await controller.resolveResource('../../outside.png'), isNull);
   });
 
+  test('images larger than the cap are not resolved', () async {
+    source
+      ..addBytes('/ws/docs/big.png', Uint8List(51))
+      ..addBytes('/ws/docs/ok.png', Uint8List(50));
+    await controller.openWorkspace(workspace, file: '/ws/docs/b.md');
+    source.reads.clear();
+    expect(await controller.resolveResource('big.png'), isNull);
+    expect(source.reads, isEmpty, reason: 'the size is checked before reading');
+    expect(await controller.resolveResource('ok.png'), startsWith('data:image/png;base64,'));
+  });
+
+  test('the default image cap is 20 MB', () {
+    final defaults = DocumentController(renderer: FakeRendererController(), launcher: FakeLauncher());
+    addTearDown(defaults.dispose);
+    expect(defaults.maxImageBytes, 20 * 1024 * 1024);
+  });
+
   test('image mime types', () {
     expect(imageMimeType('a.PNG'), 'image/png');
     expect(imageMimeType('a.jpeg'), 'image/jpeg');
@@ -228,5 +249,62 @@ void main() {
     expect(controller.showPlainText, isTrue);
     await controller.open('/ws/docs/b.md');
     expect(controller.showPlainText, isFalse);
+  });
+
+  group('with real files and symbolic links', () {
+    late Directory temp;
+    late String ws;
+    late String outside;
+
+    setUp(() async {
+      temp = await Directory.systemTemp.createTemp('mdv_doc_links');
+      ws = p.join(temp.path, 'ws');
+      outside = p.join(temp.path, 'outside');
+      await Directory(ws).create();
+      await Directory(outside).create();
+      File(p.join(outside, 'secret.md')).writeAsStringSync('# Secret');
+      File(p.join(outside, 'secret.png')).writeAsStringSync('SECRETPNG');
+      File(p.join(ws, 'README.md')).writeAsStringSync('# Readme');
+      File(p.join(ws, 'inner.png')).writeAsStringSync('PNG');
+      Link(p.join(ws, 'leak.md')).createSync(p.join(outside, 'secret.md'));
+      Link(p.join(ws, 'leak.png')).createSync(p.join(outside, 'secret.png'));
+      Link(p.join(ws, 'alias.md')).createSync(p.join(ws, 'README.md'));
+      Link(p.join(ws, 'linked')).createSync(outside);
+    });
+
+    tearDown(() => temp.delete(recursive: true));
+
+    test('images behind escaping symlinks are not resolved', () async {
+      await controller.openWorkspace(Workspace.folder(source: IoFileSource(supportsWatch: false), root: ws));
+      expect(controller.status, DocumentStatus.ready);
+      expect(await controller.resolveResource('inner.png'), 'data:image/png;base64,${base64Encode(utf8.encode('PNG'))}');
+      expect(await controller.resolveResource('leak.png'), isNull);
+      expect(await controller.resolveResource('linked/secret.png'), isNull);
+    });
+
+    test('documents behind escaping symlinks are refused; internal links are fine', () async {
+      await controller.openWorkspace(Workspace.folder(source: IoFileSource(supportsWatch: false), root: ws));
+      await controller.handleLink('leak.md');
+      expect(controller.status, DocumentStatus.error);
+      expect(controller.errorMessage, contains('outside the opened folder'));
+      expect(renderer.lastMarkdown, '# Readme');
+
+      await controller.open(p.join(ws, 'linked', 'secret.md'));
+      expect(controller.status, DocumentStatus.error);
+      expect(renderer.lastMarkdown, '# Readme');
+
+      await controller.open(p.join(ws, 'alias.md'));
+      expect(controller.status, DocumentStatus.ready);
+    });
+
+    test('a symlinked file the user opened explicitly still opens', () async {
+      final file = p.join(ws, 'leak.md');
+      await controller.openWorkspace(
+        Workspace.singleFile(source: IoFileSource(supportsWatch: false), file: file),
+        file: file,
+      );
+      expect(controller.status, DocumentStatus.ready);
+      expect(renderer.lastMarkdown, '# Secret');
+    });
   });
 }

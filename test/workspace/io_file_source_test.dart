@@ -50,6 +50,18 @@ void main() {
     await expectLater(source.list(p.join(temp.path, 'nope')), throwsA(isA<FileSourceException>()));
   });
 
+  test('realPath resolves symbolic links and keeps missing paths unchanged', () async {
+    final outside = await Directory.systemTemp.createTemp('mdv_outside');
+    addTearDown(() => outside.delete(recursive: true));
+    final target = File(p.join(outside.path, 'secret.md'))..writeAsStringSync('secret');
+    final link = Link(p.join(temp.path, 'link.md'))..createSync(target.path);
+    expect(await source.realPath(link.path), await target.resolveSymbolicLinks());
+    final plain = p.join(temp.path, 'a.md');
+    expect(await source.realPath(plain), await File(plain).resolveSymbolicLinks());
+    final missing = p.join(temp.path, 'nope.md');
+    expect(await source.realPath(missing), missing);
+  });
+
   test('uses the platform path context', () {
     expect(source.pathContext.style, p.context.style);
   });

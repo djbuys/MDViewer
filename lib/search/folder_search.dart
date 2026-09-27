@@ -78,6 +78,7 @@ class FolderSearch {
       for (final path in files.skip(i).take(batchSize)) {
         final stat = await workspace.source.stat(path);
         if (stat == null || stat.size > maxFileBytes) continue;
+        if (!await workspace.containsRealPath(path)) continue;
         try {
           batch.add((path, decodeText(await workspace.source.readBytes(path))));
         } on FileSourceException {

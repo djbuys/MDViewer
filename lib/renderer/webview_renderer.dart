@@ -24,6 +24,7 @@ class WebViewRendererController implements RendererController {
   final _errors = StreamController<String>.broadcast();
 
   InAppWebViewController? _web;
+  final RendererNavigationPolicy _policy = RendererNavigationPolicy();
   ResourceResolver? _resolver;
   Timer? _readyTimer;
   String? _reason;
@@ -68,11 +69,16 @@ class WebViewRendererController implements RendererController {
   @visibleForTesting
   Future<Object?> debugEvaluate(String source) async => _web?.evaluateJavascript(source: source);
 
+  /// Handler calls are served only for the renderer page's main frame.
+  bool _acceptsCall(JavaScriptHandlerFunctionData data) =>
+      _policy.acceptsHandlerCall(isMainFrame: data.isMainFrame, requestUrl: data.requestUrl);
+
   void _attach(InAppWebViewController web) {
     _web = web;
     web.addJavaScriptHandler(
       handlerName: 'headingsChanged',
       callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
         final list = data.args.isEmpty ? const <Object?>[] : data.args.first as List<Object?>;
         _headings.add([for (final item in list) Heading.fromJson(item! as Map<dynamic, dynamic>)]);
         return null;
@@ -81,6 +87,7 @@ class WebViewRendererController implements RendererController {
     web.addJavaScriptHandler(
       handlerName: 'linkClicked',
       callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
         _links.add((data.args.first as Map<dynamic, dynamic>)['href'] as String);
         return null;
       },
@@ -88,6 +95,7 @@ class WebViewRendererController implements RendererController {
     web.addJavaScriptHandler(
       handlerName: 'findResult',
       callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
         _finds.add(FindResult.fromJson(data.args.first as Map<dynamic, dynamic>));
         return null;
       },
@@ -95,6 +103,7 @@ class WebViewRendererController implements RendererController {
     web.addJavaScriptHandler(
       handlerName: 'rendered',
       callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
         _rendered.add(null);
         return null;
       },
@@ -102,6 +111,7 @@ class WebViewRendererController implements RendererController {
     web.addJavaScriptHandler(
       handlerName: 'renderError',
       callback: (JavaScriptHandlerFunctionData data) {
+        if (!_acceptsCall(data)) return null;
         _errors.add((data.args.first as Map<dynamic, dynamic>)['message'] as String);
         return null;
       },
@@ -109,13 +119,15 @@ class WebViewRendererController implements RendererController {
     web.addJavaScriptHandler(
       handlerName: 'resolveResource',
       callback: (JavaScriptHandlerFunctionData data) async {
+        if (!_acceptsCall(data)) return null;
         final path = (data.args.first as Map<dynamic, dynamic>)['path'] as String;
         return await _resolver?.call(path);
       },
     );
   }
 
-  Future<void> _onLoadStop(InAppWebViewController web) async {
+  Future<void> _onLoadStop(InAppWebViewController web, Uri? url) async {
+    if (url != null && !_policy.allowNavigation(url)) return;
     if (_status.value != RendererStatus.loading) return;
     Object? hasApi;
     try {
@@ -250,13 +262,20 @@ class _RendererViewState extends State<_RendererView> {
         allowFileAccessFromFileURLs: false,
         allowUniversalAccessFromFileURLs: false,
         mediaPlaybackRequiresUserGesture: true,
+        javaScriptBridgeForMainFrameOnly: true,
+        javaScriptBridgeOriginAllowList: bridgeOriginAllowList(controller._platform),
       ),
       onWebViewCreated: controller._attach,
-      shouldOverrideUrlLoading: (web, action) async =>
-          isRendererPage(action.request.url) ? NavigationActionPolicy.ALLOW : NavigationActionPolicy.CANCEL,
-      onLoadStop: (web, url) => controller._onLoadStop(web),
+      shouldOverrideUrlLoading: (web, action) async => controller._policy.allowNavigation(action.request.url)
+          ? NavigationActionPolicy.ALLOW
+          : NavigationActionPolicy.CANCEL,
+      // Android does not route the initial load through shouldOverrideUrlLoading.
+      onLoadStart: (web, url) => controller._policy.allowNavigation(url),
+      onLoadStop: controller._onLoadStop,
       onReceivedError: (web, request, error) {
-        if ((request.isForMainFrame ?? true) && isRendererPage(request.url)) controller.markUnavailable();
+        if ((request.isForMainFrame ?? true) && controller._policy.isRendererLoad(request.url)) {
+          controller.markUnavailable();
+        }
       },
       onConsoleMessage: kDebugMode ? (web, message) => debugPrint('[renderer] ${message.message}') : null,
     );

@@ -55,6 +55,15 @@ class IoFileSource implements FileSource {
   }
 
   @override
+  Future<String> realPath(String path) async {
+    try {
+      return await File(path).resolveSymbolicLinks();
+    } on FileSystemException {
+      return path;
+    }
+  }
+
+  @override
   Stream<void> watch(String path) {
     if (!supportsWatch) return const Stream.empty();
     late final StreamController<void> controller;

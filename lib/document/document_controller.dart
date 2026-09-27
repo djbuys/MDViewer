@@ -36,6 +36,7 @@ class DocumentController extends ChangeNotifier {
     this.reloadDebounce = const Duration(milliseconds: 200),
     this.largeFileBytes = 5 * 1024 * 1024,
     this.hugeFileBytes = 50 * 1024 * 1024,
+    this.maxImageBytes = 20 * 1024 * 1024,
   }) {
     renderer.resourceResolver = resolveResource;
     _subscriptions.addAll([
@@ -52,12 +53,19 @@ class DocumentController extends ChangeNotifier {
   final int largeFileBytes;
   final int hugeFileBytes;
 
+  /// Larger images are not resolved.
+  final int maxImageBytes;
+
   final List<StreamSubscription<Object?>> _subscriptions = [];
   final StreamController<String> _messages = StreamController<String>.broadcast();
   final List<String> _back = [];
   final List<String> _forward = [];
 
   Workspace? _workspace;
+
+  /// The file the user explicitly opened; trusted even if it is a symbolic
+  /// link that points outside the workspace root.
+  String? _explicitFile;
   String? _path;
   DocumentStatus _status = DocumentStatus.empty;
   String? _error;
@@ -103,6 +111,7 @@ class DocumentController extends ChangeNotifier {
 
   Future<void> openWorkspace(Workspace workspace, {String? file}) async {
     _workspace = workspace;
+    _explicitFile = file;
     _back.clear();
     _forward.clear();
     _stopWatching();
@@ -206,6 +215,9 @@ class DocumentController extends ChangeNotifier {
     final mime = imageMimeType(resolved);
     if (mime == null) return null;
     try {
+      final stat = await workspace.source.stat(resolved);
+      if (stat == null || stat.size > maxImageBytes) return null;
+      if (!await workspace.containsRealPath(resolved)) return null;
       final bytes = await workspace.source.readBytes(resolved);
       return 'data:$mime;base64,${base64Encode(bytes)}';
     } on FileSourceException {
@@ -252,6 +264,10 @@ class DocumentController extends ChangeNotifier {
       final stat = await workspace.source.stat(path);
       if (generation != _loadGeneration) return;
       if (stat == null) throw FileSourceException(path, 'File not found: $path');
+      if (path != _explicitFile && !await workspace.containsRealPath(path)) {
+        throw FileSourceException(path, 'Not opening $path: it links to a file outside the opened folder.');
+      }
+      if (generation != _loadGeneration) return;
       final bytes = await workspace.source.readBytes(path);
       if (generation != _loadGeneration) return;
       _modified = stat.modified;

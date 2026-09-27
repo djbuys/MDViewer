@@ -1,8 +1,12 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mdviewer/search/folder_search.dart';
+import 'package:mdviewer/workspace/io_file_source.dart';
 import 'package:mdviewer/workspace/workspace.dart';
+
+import 'package:path/path.dart' as p;
 
 import '../support/memory_file_source.dart';
 
@@ -53,5 +57,18 @@ void main() {
     final source = MemoryFileSource()..addText('/ws/a.md', 'x');
     expect(await FolderSearch(Workspace.folder(source: source, root: '/ws')).search('  '), isEmpty);
     expect(source.reads, isEmpty);
+  });
+
+  test('FolderSearch skips files whose symbolic links escape the folder', () async {
+    final temp = await Directory.systemTemp.createTemp('mdv_search_links');
+    addTearDown(() => temp.delete(recursive: true));
+    final ws = await Directory(p.join(temp.path, 'ws')).create();
+    final outside = await Directory(p.join(temp.path, 'outside')).create();
+    File(p.join(outside.path, 'secret.md')).writeAsStringSync('needle secret');
+    File(p.join(ws.path, 'a.md')).writeAsStringSync('needle inside');
+    Link(p.join(ws.path, 'leak.md')).createSync(p.join(outside.path, 'secret.md'));
+
+    final hits = await FolderSearch(Workspace.folder(source: IoFileSource(), root: ws.path)).search('needle');
+    expect(hits.map((h) => p.basename(h.path)), ['a.md']);
   });
 }

@@ -57,6 +57,10 @@ void main() {
     await File(p.join(folder.path, 'other.md')).writeAsString(other);
     await Directory(p.join(folder.path, 'img')).create();
     await File(p.join(folder.path, 'img', 'dot.png')).writeAsBytes(base64Decode(dotPng));
+    // A decoy copy of the renderer page inside the opened folder.
+    await Directory(p.join(folder.path, 'assets', 'renderer')).create(recursive: true);
+    await File(p.join(folder.path, 'assets', 'renderer', 'index.html'))
+        .writeAsString('<html><body>decoy</body></html>');
   });
 
   tearDown(() => folder.delete(recursive: true));
@@ -83,6 +87,17 @@ void main() {
     expect(await renderer.debugEvaluate("document.body.innerText.includes('title: Sample')"), false);
     final src = await renderer.debugEvaluate("document.querySelector('img').getAttribute('src')");
     expect(src, startsWith('data:image/png;base64,'));
+
+    // Navigation lock: neither a remote page nor a file: copy of the renderer
+    // page may replace the bundled renderer.
+    final rendererHref = await renderer.debugEvaluate('window.location.href');
+    final decoy = Uri.file(p.join(folder.path, 'assets', 'renderer', 'index.html')).toString();
+    await renderer.debugEvaluate('window.location.href = ${jsonEncode(decoy)}; null');
+    await tester.pump(const Duration(seconds: 1));
+    await Future<void>.delayed(const Duration(seconds: 1));
+    expect(await renderer.debugEvaluate('window.location.href'), rendererHref);
+    expect(await renderer.debugEvaluate('typeof window.mdv'), 'object');
+    expect(renderer.status.value, RendererStatus.ready);
 
     await renderer.debugEvaluate("document.querySelector('a[href=\"other.md\"]').click(); null");
     await pumpUntil(

@@ -38,9 +38,21 @@ class Workspace {
 
   p.Context get _ctx => source.pathContext;
 
+  Future<String>? _realRoot;
+
+  /// Lexical containment: [path] is [root] or below it.
   bool contains(String path) {
     final normalized = _ctx.normalize(path);
     return normalized == root || _ctx.isWithin(root, normalized);
+  }
+
+  /// Containment after resolving symbolic links, so a link inside the
+  /// workspace cannot expose files outside it.
+  Future<bool> containsRealPath(String path) async {
+    if (!contains(path)) return false;
+    final realRoot = _ctx.normalize(await (_realRoot ??= source.realPath(root)));
+    final real = _ctx.normalize(await source.realPath(path));
+    return real == realRoot || _ctx.isWithin(realRoot, real);
   }
 
   String relativePath(String path) => _ctx.relative(path, from: root);

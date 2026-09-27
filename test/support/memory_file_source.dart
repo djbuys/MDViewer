@@ -72,6 +72,9 @@ class MemoryFileSource implements FileSource {
   }
 
   @override
+  Future<String> realPath(String path) async => path;
+
+  @override
   Stream<void> watch(String path) {
     if (!supportsWatch) return const Stream.empty();
     return _watchers.putIfAbsent(p.posix.normalize(path), () => StreamController<void>.broadcast()).stream;
