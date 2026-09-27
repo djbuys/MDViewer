@@ -27,6 +27,17 @@ const Map<String, String> _imageMimeTypes = {
 
 String? imageMimeType(String path) => _imageMimeTypes[p.extension(path).toLowerCase()];
 
+/// File types a link must never hand to the OS: opening them would run code.
+const Set<String> blockedExecutableExtensions = {
+  // Windows
+  '.exe', '.bat', '.cmd', '.com', '.msi', '.ps1', '.vbs', '.js', '.jse', '.wsf', '.scr', '.lnk', '.reg',
+  // Cross-platform / macOS / Linux
+  '.jar', '.app', '.command', '.sh', '.bash', '.zsh', '.csh', '.pkg', '.dmg', '.desktop', '.run', '.bin',
+  '.appimage', '.deb', '.rpm', '.apk',
+};
+
+bool isBlockedExecutable(String path) => blockedExecutableExtensions.contains(p.extension(path).toLowerCase());
+
 /// The open workspace and document: loading, history, link routing,
 /// resource resolution and live reload. UI listens to this.
 class DocumentController extends ChangeNotifier {
@@ -195,7 +206,13 @@ class DocumentController extends ChangeNotifier {
         if (!await launcher.launchUri(uri)) _messages.add('Could not open $uri');
       case WorkspaceFile(path: final file):
         final name = workspace.source.pathContext.basename(file);
-        if (!launcher.canOpenFiles) {
+        // Check the link target too: `report.txt` may be a symlink to a
+        // script, or to a file outside the workspace.
+        if (isBlockedExecutable(file) ||
+            isBlockedExecutable(await workspace.source.realPath(file)) ||
+            !await workspace.containsRealPath(file)) {
+          _messages.add('Opening $name is blocked for safety');
+        } else if (!launcher.canOpenFiles) {
           _messages.add('Opening $name is not supported on this device');
         } else if (!await launcher.openFile(file)) {
           _messages.add('Could not open $name');

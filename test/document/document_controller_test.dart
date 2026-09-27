@@ -170,6 +170,43 @@ void main() {
     expect(messages.single, contains('notes.txt'));
   });
 
+  test('links to executables are blocked instead of launched', () async {
+    source
+      ..addText('/ws/tools/setup.EXE', 'MZ')
+      ..addText('/ws/tools/run.sh', '#!/bin/sh')
+      ..addText('/ws/tools/Installer.AppImage', 'x')
+      ..addText('/ws/tools/launch.command', 'x');
+    await controller.openWorkspace(workspace);
+    final messages = <String>[];
+    controller.messages.listen(messages.add);
+    await controller.handleLink('tools/setup.EXE');
+    await controller.handleLink('tools/run.sh');
+    await controller.handleLink('tools/Installer.AppImage');
+    await controller.handleLink('tools/launch.command');
+    await settle();
+    expect(launcher.opened, isEmpty);
+    expect(messages, [
+      'Opening setup.EXE is blocked for safety',
+      'Opening run.sh is blocked for safety',
+      'Opening Installer.AppImage is blocked for safety',
+      'Opening launch.command is blocked for safety',
+    ]);
+  });
+
+  test('the executable denylist covers common launchable types', () {
+    for (final ext in [
+      '.exe', '.bat', '.cmd', '.com', '.msi', '.ps1', '.vbs', '.js', '.jse', '.wsf', '.scr', '.lnk', '.reg', //
+      '.jar', '.app', '.command', '.sh', '.bash', '.zsh', '.csh', '.pkg', '.dmg', '.desktop', '.run', '.bin',
+      '.appimage', '.deb', '.rpm', '.apk',
+    ]) {
+      expect(isBlockedExecutable('/x/file$ext'), isTrue, reason: ext);
+      expect(isBlockedExecutable('/x/FILE${ext.toUpperCase()}'), isTrue, reason: ext);
+    }
+    expect(isBlockedExecutable('/x/notes.txt'), isFalse);
+    expect(isBlockedExecutable('/x/report.pdf'), isFalse);
+    expect(isBlockedExecutable('/x/Makefile'), isFalse);
+  });
+
   test('unsupported links report a message', () async {
     await controller.openWorkspace(workspace);
     final messages = <String>[];
@@ -295,6 +332,25 @@ void main() {
 
       await controller.open(p.join(ws, 'alias.md'));
       expect(controller.status, DocumentStatus.ready);
+    });
+
+    test('file links are not launched through escaping or executable symlinks', () async {
+      File(p.join(outside, 'tool.sh')).writeAsStringSync('#!/bin/sh');
+      File(p.join(outside, 'notes.txt')).writeAsStringSync('outside');
+      File(p.join(ws, 'inside.txt')).writeAsStringSync('inside');
+      File(p.join(ws, 'script.sh')).writeAsStringSync('#!/bin/sh');
+      Link(p.join(ws, 'report.txt')).createSync(p.join(ws, 'script.sh'));
+      Link(p.join(ws, 'other.txt')).createSync(p.join(outside, 'notes.txt'));
+      await controller.openWorkspace(Workspace.folder(source: IoFileSource(supportsWatch: false), root: ws));
+      final messages = <String>[];
+      controller.messages.listen(messages.add);
+
+      await controller.handleLink('report.txt');
+      await controller.handleLink('other.txt');
+      await controller.handleLink('inside.txt');
+      await settle();
+      expect(messages, ['Opening report.txt is blocked for safety', 'Opening other.txt is blocked for safety']);
+      expect(launcher.opened, [p.join(ws, 'inside.txt')]);
     });
 
     test('a symlinked file the user opened explicitly still opens', () async {
