@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../app_services.dart';
 import '../platform/document_access.dart';
+import '../platform/edit_commands.dart';
 import '../search/find_bar.dart';
 import '../search/folder_search_dialog.dart';
 import '../settings/recents.dart';
@@ -377,11 +378,19 @@ class _AppShellState extends State<AppShell> {
     final settings = services.settings;
     return PlatformMenuBar(
       menus: [
-        const PlatformMenu(
+        PlatformMenu(
           label: 'MDViewer',
           menus: [
-            PlatformProvidedMenuItem(type: PlatformProvidedMenuItemType.about),
-            PlatformProvidedMenuItem(type: PlatformProvidedMenuItemType.quit),
+            ..._provided([PlatformProvidedMenuItemType.about]),
+            PlatformMenuItemGroup(members: _provided([PlatformProvidedMenuItemType.servicesSubmenu])),
+            PlatformMenuItemGroup(
+              members: _provided([
+                PlatformProvidedMenuItemType.hide,
+                PlatformProvidedMenuItemType.hideOtherApplications,
+                PlatformProvidedMenuItemType.showAllApplications,
+              ]),
+            ),
+            ..._provided([PlatformProvidedMenuItemType.quit]),
           ],
         ),
         PlatformMenu(
@@ -406,6 +415,21 @@ class _AppShellState extends State<AppShell> {
               label: 'Print…',
               shortcut: const SingleActivator(LogicalKeyboardKey.keyP, meta: true),
               onSelected: document.currentPath == null ? null : () => unawaited(_print(services)),
+            ),
+          ],
+        ),
+        PlatformMenu(
+          label: 'Edit',
+          menus: [
+            PlatformMenuItem(
+              label: 'Copy',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyC, meta: true),
+              onSelected: () => unawaited(const EditCommands().copy()),
+            ),
+            PlatformMenuItem(
+              label: 'Select All',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyA, meta: true),
+              onSelected: () => unawaited(const EditCommands().selectAll()),
             ),
           ],
         ),
@@ -453,8 +477,23 @@ class _AppShellState extends State<AppShell> {
             ),
           ],
         ),
+        PlatformMenu(
+          label: 'Window',
+          menus: _provided([
+            PlatformProvidedMenuItemType.minimizeWindow,
+            PlatformProvidedMenuItemType.zoomWindow,
+            PlatformProvidedMenuItemType.toggleFullScreen,
+            PlatformProvidedMenuItemType.arrangeWindowsInFront,
+          ]),
+        ),
       ],
       child: child,
     );
   }
+
+  /// The platform-provided menu items this OS actually offers.
+  static List<PlatformMenuItem> _provided(List<PlatformProvidedMenuItemType> types) => [
+        for (final type in types)
+          if (PlatformProvidedMenuItem.hasMenu(type)) PlatformProvidedMenuItem(type: type),
+      ];
 }
