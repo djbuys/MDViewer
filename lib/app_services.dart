@@ -1,0 +1,58 @@
+import 'package:flutter/widgets.dart';
+
+import 'document/document_controller.dart';
+import 'document/external_launcher.dart';
+import 'open_actions.dart';
+import 'platform/document_access.dart';
+import 'renderer/renderer_controller.dart';
+import 'renderer/webview_renderer.dart';
+import 'settings/recents.dart';
+import 'settings/settings.dart';
+
+/// The app's long-lived objects, created once in main().
+class AppServices {
+  AppServices({
+    required this.settings,
+    required this.recents,
+    required this.renderer,
+    required this.document,
+    required this.actions,
+  });
+
+  static Future<AppServices> create({List<String> args = const []}) async {
+    final settings = await Settings.load();
+    final recents = await Recents.load();
+    final renderer = WebViewRendererController();
+    final document = DocumentController(renderer: renderer, launcher: const UrlLauncherExternalLauncher());
+    final actions = OpenActions(access: createDocumentAccess(), recents: recents, document: document);
+    return AppServices(settings: settings, recents: recents, renderer: renderer, document: document, actions: actions);
+  }
+
+  final Settings settings;
+  final Recents recents;
+  final RendererController renderer;
+  final DocumentController document;
+  final OpenActions actions;
+
+  void dispose() {
+    document.dispose();
+    renderer.dispose();
+    settings.dispose();
+    recents.dispose();
+  }
+}
+
+class AppScope extends InheritedWidget {
+  const AppScope({super.key, required this.services, required super.child});
+
+  final AppServices services;
+
+  static AppServices of(BuildContext context) {
+    final scope = context.dependOnInheritedWidgetOfExactType<AppScope>();
+    assert(scope != null, 'No AppScope above this widget');
+    return scope!.services;
+  }
+
+  @override
+  bool updateShouldNotify(AppScope oldWidget) => !identical(services, oldWidget.services);
+}
