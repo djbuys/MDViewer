@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -284,7 +283,6 @@ void main() {
   });
 
   testWidgets('macOS: unified 52 px title bar with room for the traffic lights', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final menus = <MethodCall>[];
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.menu, (call) async {
       menus.add(call);
@@ -308,9 +306,7 @@ void main() {
     for (final label in ['Open File…', 'Copy', 'Select All', 'Hide Files', 'Theme: light', 'Actual Size']) {
       expect(labels, contains(label));
     }
-    await tester.pumpWidget(const SizedBox());
-    debugDefaultTargetPlatformOverride = null;
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   testWidgets('dark theme setting renders documents dark', (tester) async {
     final harness = await createHarness();

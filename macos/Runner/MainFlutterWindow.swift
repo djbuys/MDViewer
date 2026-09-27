@@ -83,6 +83,8 @@ final class WindowChannel {
       case "toggleZoom":
         WindowChannel.titleBarDoubleClick(window: window)
         result(nil)
+      case "isFullScreen":
+        result(window.styleMask.contains(.fullScreen))
       default:
         #if DEBUG
           if let handled = self.handleDebug(call, window: window) {
@@ -94,7 +96,20 @@ final class WindowChannel {
       }
     }
     self.channel = channel
+
+    // The traffic lights are hidden in full screen; Flutter drops their inset.
+    let center = NotificationCenter.default
+    fullScreenObservers = [
+      center.addObserver(forName: NSWindow.willEnterFullScreenNotification, object: window, queue: .main) {
+        [weak self] _ in self?.channel?.invokeMethod("fullScreenChanged", arguments: true)
+      },
+      center.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) {
+        [weak self] _ in self?.channel?.invokeMethod("fullScreenChanged", arguments: false)
+      },
+    ]
   }
+
+  private var fullScreenObservers: [NSObjectProtocol] = []
 
   private func startDrag(window: NSWindow) {
     guard let event = lastMouseDown, NSEvent.pressedMouseButtons & 1 == 1 else { return }

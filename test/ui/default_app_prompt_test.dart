@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -103,7 +102,6 @@ void main() {
   });
 
   testWidgets('macOS app menu offers the same action while not default', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final menus = <MethodCall>[];
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.menu, (call) async {
       menus.add(call);
@@ -115,7 +113,5 @@ void main() {
     final menu = menus.last.arguments.toString();
     expect(menu, contains('Make MDViewer the Default for Markdown…'));
     expect(RegExp(r'label: Make MDViewer the Default for Markdown…, enabled: true').hasMatch(menu), isTrue, reason: menu);
-    await tester.pumpWidget(const SizedBox());
-    debugDefaultTargetPlatformOverride = null;
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 }

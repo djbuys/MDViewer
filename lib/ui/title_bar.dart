@@ -28,7 +28,7 @@ class MdTitleBar extends StatelessWidget implements PreferredSizeWidget {
     required this.platform,
     this.leading,
     this.wide = true,
-    this.windowControls = const WindowControls(),
+    this.windowControls,
   });
 
   final String title;
@@ -40,7 +40,11 @@ class MdTitleBar extends StatelessWidget implements PreferredSizeWidget {
 
   /// Separates button groups with dividers.
   final bool wide;
-  final WindowControls windowControls;
+
+  /// Defaults to [WindowControls.instance].
+  final WindowControls? windowControls;
+
+  WindowControls get _controls => windowControls ?? WindowControls.instance;
 
   bool get _mac => platform == TargetPlatform.macOS;
 
@@ -54,9 +58,18 @@ class MdTitleBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!_mac) return _layout(trafficLightInset: 0);
+    // The traffic lights are hidden in full screen.
+    return ValueListenableBuilder<bool>(
+      valueListenable: _controls.fullScreen,
+      builder: (context, fullScreen, _) => _layout(trafficLightInset: fullScreen ? 0 : macTrafficLightInset),
+    );
+  }
+
+  Widget _layout({required double trafficLightInset}) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final leadingWidth = (_mac ? macTrafficLightInset : 0) + (leading == null ? 0 : buttonExtent);
+        final leadingWidth = trafficLightInset + (leading == null ? 0 : buttonExtent);
         final split = splitTitleBarActions(
           actions,
           available: constraints.maxWidth - leadingWidth - _minTitleWidth - 16,
@@ -64,7 +77,7 @@ class MdTitleBar extends StatelessWidget implements PreferredSizeWidget {
           dividerWidth: wide ? _dividerWidth : 0,
         );
         final buttons = _buttons(context, split.bar, overflow: split.overflow);
-        return _mac ? _macBar(context, buttons) : _appBar(context, buttons);
+        return _mac ? _macBar(context, buttons, trafficLightInset: trafficLightInset) : _appBar(context, buttons);
       },
     );
   }
@@ -76,12 +89,12 @@ class MdTitleBar extends StatelessWidget implements PreferredSizeWidget {
         actions: [...buttons, const SizedBox(width: 4)],
       );
 
-  Widget _macBar(BuildContext context, List<Widget> buttons) {
+  Widget _macBar(BuildContext context, List<Widget> buttons, {required double trafficLightInset}) {
     final theme = Theme.of(context);
     Widget dragArea(Widget child) => GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onPanStart: (_) => unawaited(windowControls.startDrag()),
-          onDoubleTap: () => unawaited(windowControls.toggleZoom()),
+          onPanStart: (_) => unawaited(_controls.startDrag()),
+          onDoubleTap: () => unawaited(_controls.toggleZoom()),
           child: child,
         );
     return Material(
@@ -95,7 +108,7 @@ class MdTitleBar extends StatelessWidget implements PreferredSizeWidget {
           height: macTitleBarHeight,
           child: Row(
             children: [
-              dragArea(const SizedBox(width: macTrafficLightInset, height: macTitleBarHeight)),
+              if (trafficLightInset > 0) dragArea(SizedBox(width: trafficLightInset, height: macTitleBarHeight)),
               ?leading,
               Expanded(
                 child: dragArea(
@@ -220,18 +233,22 @@ class MdTitleBar extends StatelessWidget implements PreferredSizeWidget {
 }) {
   final candidates = [for (final a in actions) if (a.group != null && !a.menuOnly) a];
   final pinned = candidates.where((a) => a.priority >= ActionPriority.pinned);
-  // The overflow button, pinned buttons and every possible divider.
-  var remaining = available -
-      extent * (1 + pinned.length) -
-      dividerWidth * (candidates.map((a) => a.group).toSet().length - 1).clamp(0, 99);
+  // The overflow button and the pinned buttons always stay.
+  var remaining = available - extent * (1 + pinned.length);
+  final visibleGroups = {for (final a in pinned) a.group};
   final levels = {for (final a in candidates) if (a.priority < ActionPriority.pinned) a.priority}.toList()
     ..sort((a, b) => b.compareTo(a));
   final admitted = <int>{ActionPriority.pinned};
   for (final level in levels) {
-    final cost = extent * candidates.where((a) => a.priority == level).length;
+    final members = candidates.where((a) => a.priority == level);
+    final newGroups = {for (final a in members) a.group}.difference(visibleGroups);
+    // A divider separates each newly shown group from the ones already there.
+    final dividers = newGroups.length - (visibleGroups.isEmpty ? 1 : 0);
+    final cost = extent * members.length + dividerWidth * (dividers < 0 ? 0 : dividers);
     if (cost > remaining) break;
     remaining -= cost;
     admitted.add(level);
+    visibleGroups.addAll(newGroups);
   }
   bool shown(AppAction a) => admitted.contains(a.priority.clamp(0, ActionPriority.pinned));
   return (

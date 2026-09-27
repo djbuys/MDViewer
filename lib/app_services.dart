@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/widgets.dart';
 
 import 'document/document_controller.dart';
@@ -8,6 +10,7 @@ import 'platform/document_access.dart';
 import 'platform/document_sharer.dart';
 import 'platform/file_saving.dart';
 import 'platform/incoming_files.dart';
+import 'platform/window_controls.dart';
 import 'renderer/renderer_controller.dart';
 import 'renderer/webview_renderer.dart';
 import 'settings/recents.dart';
@@ -28,6 +31,7 @@ class AppServices {
   }) : incoming = incoming ?? IncomingFiles(useChannel: false);
 
   static Future<AppServices> create({List<String> args = const []}) async {
+    if (Platform.isMacOS) await WindowControls.instance.listen();
     final settings = await Settings.load();
     final recents = await Recents.load();
     final renderer = WebViewRendererController();

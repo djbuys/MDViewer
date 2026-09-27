@@ -8,6 +8,7 @@ import 'package:mdviewer/app.dart';
 import 'package:mdviewer/app_services.dart';
 import 'package:mdviewer/platform/document_access.dart';
 import 'package:mdviewer/platform/edit_commands.dart';
+import 'package:mdviewer/platform/window_controls.dart';
 import 'package:mdviewer/renderer/renderer_controller.dart';
 import 'package:mdviewer/renderer/webview_renderer.dart';
 import 'package:mdviewer/settings/settings.dart';
@@ -27,12 +28,19 @@ Future<String?> _hitTest(Offset point) => _window.invokeMethod<String>(
   {'x': point.dx, 'y': point.dy},
 );
 
-Future<void> _click(WidgetTester tester, Offset point) async {
+/// Clicks at [point], then pumps until [until] holds (up to ~10 s, since a
+/// busy machine can delay frames) or, without [until], for 500 ms.
+Future<void> _click(
+  WidgetTester tester,
+  Offset point, {
+  bool Function()? until,
+}) async {
   await _window.invokeMethod<bool>('debugClick', {
     'x': point.dx,
     'y': point.dy,
   });
-  for (var i = 0; i < 10; i++) {
+  for (var i = 0; i < (until == null ? 10 : 200); i++) {
+    if (until != null && until()) return;
     await tester.pump(const Duration(milliseconds: 50));
   }
 }
@@ -90,6 +98,14 @@ Future<void> _run(WidgetTester tester) async {
   await pumpUntil(tester, () => renders >= 1, reason: 'first render');
   await tester.pumpAndSettle();
 
+  // The native side answered isFullScreen (not in full screen), so the
+  // traffic-light inset is in place.
+  expect(WindowControls.instance.fullScreen.value, isFalse);
+  expect(
+    tester.getTopLeft(find.byKey(const Key('title-bar-title'))).dx,
+    greaterThanOrEqualTo(macTrafficLightInset),
+  );
+
   // The traffic lights are vertically centred in the 52 px bar.
   final close = await _window.invokeMapMethod<String, Object?>(
     'debugCloseButtonFrame',
@@ -122,20 +138,32 @@ Future<void> _run(WidgetTester tester) async {
   );
 
   final before = services.settings.themeMode;
-  await _click(tester, theme);
-  expect(
-    services.settings.themeMode,
-    isNot(before),
-    reason: 'a native click on the theme button cycles the theme',
-  );
-  await _click(tester, theme);
-  await _click(tester, theme);
+  AppThemeMode next(AppThemeMode mode) =>
+      AppThemeMode.values[(mode.index + 1) % AppThemeMode.values.length];
+  var expected = before;
+  for (var i = 0; i < 3; i++) {
+    expected = next(expected);
+    await _click(
+      tester,
+      theme,
+      until: () => services.settings.themeMode == expected,
+    );
+    expect(
+      services.settings.themeMode,
+      expected,
+      reason: 'a native click on the theme button cycles the theme',
+    );
+  }
   expect(services.settings.themeMode, before);
 
   // A second button, near the right edge of the bar.
   final larger = tester.getCenter(find.byKey(const Key('action-font-up')));
   final scale = services.settings.fontScale;
-  await _click(tester, larger);
+  await _click(
+    tester,
+    larger,
+    until: () => services.settings.fontScale > scale,
+  );
   expect(services.settings.fontScale, greaterThan(scale));
   await services.settings.resetFontScale();
   expect(services.settings.fontScale, 1.0);
