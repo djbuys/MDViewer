@@ -14,6 +14,7 @@ class MainFlutterWindow: NSWindow {
     let messenger = flutterViewController.engine.binaryMessenger
     IncomingFilesChannel.shared.attach(messenger: messenger)
     EditChannel.shared.attach(messenger: messenger)
+    DefaultAppChannel.shared.attach(messenger: messenger)
     WindowChannel.shared.attach(window: self, messenger: messenger)
 
     configureTitleBar()

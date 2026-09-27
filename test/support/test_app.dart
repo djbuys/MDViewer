@@ -23,6 +23,7 @@ class TestHarness {
     required this.launcher,
     required this.source,
     required this.sharer,
+    required this.defaultApp,
   });
 
   final AppServices services;
@@ -31,6 +32,7 @@ class TestHarness {
   final FakeLauncher launcher;
   final MemoryFileSource source;
   final FakeSharer sharer;
+  final FakeDefaultAppHandler defaultApp;
 
   /// Suggested names passed to the save-location picker.
   final List<String> saveSuggestions = [];
@@ -63,6 +65,7 @@ Future<TestHarness> createHarness({IncomingFiles? incoming, bool resetPreference
   final document = DocumentController(renderer: renderer, launcher: launcher, reloadDebounce: Duration.zero);
   final actions = OpenActions(access: access, recents: recents, document: document);
   final sharer = FakeSharer();
+  final defaultApp = FakeDefaultAppHandler();
   late final TestHarness harness;
   final services = AppServices(
     settings: settings,
@@ -77,6 +80,7 @@ Future<TestHarness> createHarness({IncomingFiles? incoming, bool resetPreference
       return harness.saveLocation;
     },
     writeFile: (path, bytes) async => harness.writtenFiles[path] = bytes,
+    defaultApp: defaultApp,
   );
   return harness = TestHarness(
     services: services,
@@ -85,6 +89,7 @@ Future<TestHarness> createHarness({IncomingFiles? incoming, bool resetPreference
     launcher: launcher,
     source: source,
     sharer: sharer,
+    defaultApp: defaultApp,
   );
 }
 

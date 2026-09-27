@@ -9,7 +9,8 @@ class Settings extends ChangeNotifier {
       : _themeMode = AppThemeMode.values.asNameMap()[_prefs.getString(_themeKey)] ?? AppThemeMode.system,
         _fontScale = _clamp(_prefs.getDouble(_fontScaleKey) ?? 1.0),
         _sidebarVisible = _prefs.getBool(_sidebarKey) ?? true,
-        _tocVisible = _prefs.getBool(_tocKey) ?? true;
+        _tocVisible = _prefs.getBool(_tocKey) ?? true,
+        _defaultAppPromptDone = _prefs.getBool(_defaultAppPromptKey) ?? false;
 
   static const minFontScale = 0.8;
   static const maxFontScale = 1.6;
@@ -18,6 +19,7 @@ class Settings extends ChangeNotifier {
   static const _fontScaleKey = 'fontScale';
   static const _sidebarKey = 'sidebarVisible';
   static const _tocKey = 'tocVisible';
+  static const _defaultAppPromptKey = 'defaultAppPromptDone';
 
   static Future<Settings> load([SharedPreferences? prefs]) async =>
       Settings._(prefs ?? await SharedPreferences.getInstance());
@@ -27,6 +29,7 @@ class Settings extends ChangeNotifier {
   double _fontScale;
   bool _sidebarVisible;
   bool _tocVisible;
+  bool _defaultAppPromptDone;
 
   AppThemeMode get themeMode => _themeMode;
   double get fontScale => _fontScale;
@@ -36,6 +39,15 @@ class Settings extends ChangeNotifier {
 
   /// Whether the contents panel is shown in the wide layout.
   bool get tocVisible => _tocVisible;
+
+  /// Whether the first-run "make MDViewer the default app" question was
+  /// asked (whatever the answer).
+  bool get defaultAppPromptDone => _defaultAppPromptDone;
+
+  Future<void> markDefaultAppPromptDone() async {
+    _defaultAppPromptDone = true;
+    await _prefs.setBool(_defaultAppPromptKey, true);
+  }
 
   Future<void> setThemeMode(AppThemeMode mode) async {
     if (mode == _themeMode) return;

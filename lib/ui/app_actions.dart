@@ -90,6 +90,11 @@ abstract interface class AppActionHost {
   Future<void> savePdf();
   Future<void> shareDocument();
   void openContentsDrawer();
+  Future<void> makeDefaultApp();
+
+  /// Whether MDViewer is the default app for Markdown; null while unknown
+  /// or where unsupported.
+  bool? get isDefaultApp;
 
   /// Anchors the share button.
   GlobalKey get shareAnchor;
@@ -309,6 +314,14 @@ List<AppAction> buildAppActions({
       onSelected: () => unawaited(settings.resetFontScale()),
     ),
     if (platform == TargetPlatform.macOS) ...[
+      if (services.defaultApp.isSupported)
+        AppAction(
+          id: 'make-default',
+          label: 'Make MDViewer the Default for Markdown…',
+          icon: Icons.task_alt,
+          onSelected: when(host.isDefaultApp == false, () => unawaited(host.makeDefaultApp())),
+          menuOnly: true,
+        ),
       AppAction(
         id: 'copy',
         label: 'Copy',
@@ -355,6 +368,9 @@ List<PlatformMenuItem> macMenus(List<AppAction> actions) {
       label: 'MDViewer',
       menus: [
         ..._provided([PlatformProvidedMenuItemType.about]),
+        ...groups([
+          ['make-default'],
+        ]),
         PlatformMenuItemGroup(members: _provided([PlatformProvidedMenuItemType.servicesSubmenu])),
         PlatformMenuItemGroup(
           members: _provided([

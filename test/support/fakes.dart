@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:mdviewer/document/external_launcher.dart';
+import 'package:mdviewer/platform/default_app.dart';
 import 'package:mdviewer/platform/document_access.dart';
 import 'package:mdviewer/platform/document_sharer.dart';
 import 'package:mdviewer/settings/recents.dart';
@@ -68,5 +69,25 @@ class FakeSharer implements DocumentSharer {
   Future<void> share({required Uint8List bytes, required String name, required String mimeType, Rect? origin}) async {
     if (error != null) throw error!;
     shared.add(SharedDocument(bytes: bytes, name: name, mimeType: mimeType, origin: origin));
+  }
+}
+
+class FakeDefaultAppHandler implements DefaultAppHandler {
+  FakeDefaultAppHandler({this.isSupported = false, this.isDefaultApp = false, this.makeDefaultResult = true});
+
+  @override
+  bool isSupported;
+  bool isDefaultApp;
+  bool makeDefaultResult;
+  int makeDefaultCalls = 0;
+
+  @override
+  Future<bool> isDefault() async => isDefaultApp;
+
+  @override
+  Future<bool> makeDefault() async {
+    makeDefaultCalls++;
+    if (makeDefaultResult) isDefaultApp = true;
+    return makeDefaultResult;
   }
 }

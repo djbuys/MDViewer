@@ -67,4 +67,12 @@ void main() {
     expect(prefs.getBool('sidebarVisible'), isFalse);
     expect(prefs.getBool('tocVisible'), isFalse);
   });
+
+  test('remembers that the default-app question was asked', () async {
+    final settings = await Settings.load();
+    expect(settings.defaultAppPromptDone, isFalse);
+    await settings.markDefaultAppPromptDone();
+    expect(settings.defaultAppPromptDone, isTrue);
+    expect((await Settings.load()).defaultAppPromptDone, isTrue);
+  });
 }

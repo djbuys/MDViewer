@@ -152,4 +152,11 @@ Future<void> _run(WidgetTester tester) async {
     'window.getSelection().toString()',
   );
   expect(selected, contains('Some text to select.'));
+
+  // The default-app channel answers (read-only; makeDefault is never called
+  // here because it changes the user's system settings).
+  expect(services.defaultApp.isSupported, isTrue);
+  final isDefault = await services.defaultApp.isDefault();
+  // ignore: avoid_print
+  print('MDViewer is the default Markdown app: $isDefault');
 }

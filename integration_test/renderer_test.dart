@@ -66,7 +66,7 @@ void main() {
   tearDown(() => folder.delete(recursive: true));
 
   testWidgets('opens a folder and renders it in the real WebView', (tester) async {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'defaultAppPromptDone': true});
     final services = await AppServices.create();
     final renderer = services.renderer as WebViewRendererController;
     var renders = 0;

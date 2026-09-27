@@ -10,6 +10,7 @@ import '../search/find_bar.dart';
 import '../search/folder_search_dialog.dart';
 import '../settings/settings.dart';
 import 'app_actions.dart';
+import 'default_app_prompt.dart';
 import 'document_commands.dart';
 import 'document_pane.dart';
 import 'file_sidebar.dart';
@@ -53,12 +54,20 @@ class _AppShellState extends State<AppShell> implements AppActionHost {
       if (mounted) showMessage(context, message);
     });
     _lifecycle?.dispose();
-    _lifecycle = AppLifecycleListener(onResume: () => unawaited(services.document.checkForChanges()));
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        unawaited(services.document.checkForChanges());
+        unawaited(_refreshDefaultApp(services));
+      },
+    );
     unawaited(_incoming?.cancel());
     _incoming = services.incoming.documents.listen((document) => unawaited(services.actions.openIncoming(document)));
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final initial = await services.incoming.takeInitial();
       if (initial.isNotEmpty) await services.actions.openIncoming(initial.first);
+      if (!mounted) return;
+      final isDefault = await offerDefaultAppOnFirstRun(context, services);
+      if (mounted) setState(() => isDefaultApp = isDefault);
     });
   }
 
@@ -112,6 +121,23 @@ class _AppShellState extends State<AppShell> implements AppActionHost {
     } catch (e) {
       if (mounted) showMessage(context, 'Printing failed: $e');
     }
+  }
+
+  @override
+  bool? isDefaultApp;
+
+  /// The user may change the default in Finder while MDViewer runs.
+  Future<void> _refreshDefaultApp(AppServices services) async {
+    if (!services.defaultApp.isSupported) return;
+    final isDefault = await services.defaultApp.isDefault();
+    if (mounted && isDefault != isDefaultApp) setState(() => isDefaultApp = isDefault);
+  }
+
+  @override
+  Future<void> makeDefaultApp() async {
+    final services = AppScope.of(context);
+    final ok = await makeDefaultAppCommand(context, services);
+    if (mounted) setState(() => isDefaultApp = ok || isDefaultApp == true);
   }
 
   @override

@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'document/document_controller.dart';
 import 'document/external_launcher.dart';
 import 'open_actions.dart';
+import 'platform/default_app.dart';
 import 'platform/document_access.dart';
 import 'platform/document_sharer.dart';
 import 'platform/file_saving.dart';
@@ -24,6 +25,7 @@ class AppServices {
     this.sharer = const SharePlusDocumentSharer(),
     this.pickSaveLocation = pickPdfSaveLocation,
     this.writeFile = writeFileBytes,
+    this.defaultApp = const UnsupportedDefaultAppHandler(),
   }) : incoming = incoming ?? IncomingFiles(useChannel: false);
 
   static Future<AppServices> create({List<String> args = const []}) async {
@@ -39,6 +41,7 @@ class AppServices {
       document: document,
       actions: actions,
       incoming: IncomingFiles(args: args),
+      defaultApp: createDefaultAppHandler(),
     );
   }
 
@@ -51,6 +54,7 @@ class AppServices {
   final DocumentSharer sharer;
   final SaveLocationPicker pickSaveLocation;
   final FileWriter writeFile;
+  final DefaultAppHandler defaultApp;
 
   void dispose() {
     incoming.dispose();

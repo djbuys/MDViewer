@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import UniformTypeIdentifiers
 import WebKit
 
 @main
@@ -60,6 +61,66 @@ final class EditChannel {
       view = current.superview
     }
     return false
+  }
+}
+
+/// Default app for Markdown (`mdviewer/default_app`): `isDefault` and
+/// `makeDefault` through LaunchServices. Apps are compared by bundle
+/// identifier, so the /Applications copy and build copies count as the same.
+final class DefaultAppChannel {
+  static let shared = DefaultAppChannel()
+
+  private var channel: FlutterMethodChannel?
+
+  func attach(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: "mdviewer/default_app", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "isDefault":
+        result(DefaultAppChannel.isDefault())
+      case "makeDefault":
+        DefaultAppChannel.makeDefault { result($0) }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    self.channel = channel
+  }
+
+  /// The Markdown type, plus the `.md` extension's type if it differs.
+  private static var markdownTypes: [UTType] {
+    var types: [UTType] = []
+    if let markdown = UTType("net.daringfireball.markdown") { types.append(markdown) }
+    if let md = UTType(filenameExtension: "md"), !types.contains(md) { types.append(md) }
+    return types
+  }
+
+  static func isDefault() -> Bool {
+    guard let me = Bundle.main.bundleIdentifier, !markdownTypes.isEmpty else { return false }
+    return markdownTypes.allSatisfy { type in
+      guard let app = NSWorkspace.shared.urlForApplication(toOpen: type) else { return false }
+      return Bundle(url: app)?.bundleIdentifier == me
+    }
+  }
+
+  static func makeDefault(completion: @escaping (Bool) -> Void) {
+    let types = markdownTypes
+    guard !types.isEmpty else {
+      completion(false)
+      return
+    }
+    let group = DispatchGroup()
+    var failed = false
+    for type in types {
+      group.enter()
+      NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpen: type) { error in
+        DispatchQueue.main.async {
+          if error != nil { failed = true }
+          group.leave()
+        }
+      }
+    }
+    group.notify(queue: .main) { completion(!failed && isDefault()) }
   }
 }
 
