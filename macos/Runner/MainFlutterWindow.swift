@@ -152,6 +152,11 @@ final class WindowChannel {
       case "debugClick":
         // A real NSEvent delivered through NSWindow.sendEvent, i.e. through
         // AppKit's hit-testing and the title bar, as a user click would be.
+        // The window is activated first: in an inactive window the first
+        // click only activates it (the content view does not accept first
+        // mouse), and the test runner often starts the app in the background.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
         let now = ProcessInfo.processInfo.systemUptime
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
           guard
