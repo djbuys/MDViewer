@@ -61,6 +61,10 @@ class RenderOptions {
   final bool heavyFeatures;
   final double? restoreScrollY;
 
+  /// The same options without [restoreScrollY], for replaying a render.
+  RenderOptions withoutScrollRestore() =>
+      RenderOptions(dark: dark, fontScale: fontScale, heavyFeatures: heavyFeatures);
+
   Map<String, Object?> toJson() => {
         'theme': dark ? 'dark' : 'light',
         'fontScale': fontScale,

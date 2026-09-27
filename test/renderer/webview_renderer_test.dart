@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mdviewer/renderer/renderer_bridge.dart';
 import 'package:mdviewer/renderer/renderer_controller.dart';
 import 'package:mdviewer/renderer/webview_renderer.dart';
 
@@ -24,6 +25,80 @@ void main() {
     expect(renderer.status.value, RendererStatus.unavailable);
     expect(renderer.unavailableReason, contains('WebView2'));
     renderer.dispose();
+  });
+
+  group('page loads', () {
+    late List<String> calls;
+    late int contentNodes;
+    late bool hasApi;
+
+    Future<Object?> evaluate(String source) async {
+      calls.add(source);
+      if (source.contains('typeof window.mdv')) return hasApi;
+      if (source.contains('childNodes.length')) return contentNodes;
+      return null;
+    }
+
+    setUp(() {
+      calls = [];
+      contentNodes = 0;
+      hasApi = true;
+    });
+
+    const options = RenderOptions(dark: true, fontScale: 1.2, heavyFeatures: true, restoreScrollY: 40);
+    final replayed = jsCall('render', [
+      '# A',
+      const RenderOptions(dark: true, fontScale: 1.2, heavyFeatures: true).toJson(),
+    ]);
+
+    test('the first load makes the renderer ready and flushes a pending render', () async {
+      final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
+      addTearDown(renderer.dispose);
+      await renderer.render('# A', options);
+      await renderer.debugHandlePageLoaded(evaluate);
+      expect(renderer.status.value, RendererStatus.ready);
+      expect(calls.last, jsCall('render', ['# A', options.toJson()]));
+    });
+
+    test('a reload while ready replays the last render without the scroll restore', () async {
+      final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
+      addTearDown(renderer.dispose);
+      await renderer.debugHandlePageLoaded(evaluate);
+      await renderer.render('# A', options);
+      expect(calls.last, jsCall('render', ['# A', options.toJson()]));
+
+      calls.clear();
+      await renderer.debugHandlePageLoaded(evaluate);
+      expect(calls.last, replayed);
+      expect(renderer.status.value, RendererStatus.ready);
+    });
+
+    test('a repeated load event on a page that still shows content does not re-render', () async {
+      final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
+      addTearDown(renderer.dispose);
+      await renderer.debugHandlePageLoaded(evaluate);
+      await renderer.render('# A', options);
+      contentNodes = 3;
+      calls.clear();
+      await renderer.debugHandlePageLoaded(evaluate);
+      expect(calls.where((c) => c.contains('mdv.render')), isEmpty);
+    });
+
+    test('a reload before anything was rendered sends nothing', () async {
+      final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
+      addTearDown(renderer.dispose);
+      await renderer.debugHandlePageLoaded(evaluate);
+      await renderer.debugHandlePageLoaded(evaluate);
+      expect(calls.where((c) => c.contains('mdv.render')), isEmpty);
+    });
+
+    test('a page without the renderer API makes the renderer unavailable', () async {
+      final renderer = WebViewRendererController(platform: TargetPlatform.macOS);
+      addTearDown(renderer.dispose);
+      hasApi = false;
+      await renderer.debugHandlePageLoaded(evaluate);
+      expect(renderer.status.value, RendererStatus.unavailable);
+    });
   });
 
   test('calls before the page is ready are safe no-ops', () async {

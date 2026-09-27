@@ -7,6 +7,8 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'renderer_bridge.dart';
 import 'renderer_controller.dart';
 
+typedef JsEvaluator = Future<Object?> Function(String source);
+
 /// Hosts the bundled JS renderer in a WebView. Only one view should be
 /// mounted per controller; keep it mounted for the app's lifetime.
 class WebViewRendererController implements RendererController {
@@ -24,11 +26,16 @@ class WebViewRendererController implements RendererController {
   final _errors = StreamController<String>.broadcast();
 
   InAppWebViewController? _web;
+  JsEvaluator? _evaluate;
   final RendererNavigationPolicy _policy = RendererNavigationPolicy();
   ResourceResolver? _resolver;
   Timer? _readyTimer;
   String? _reason;
   ({String markdown, RenderOptions options})? _pending;
+
+  /// The most recent render (without its scroll restore), replayed when the
+  /// page reloads.
+  ({String markdown, RenderOptions options})? _last;
 
   @override
   ValueListenable<RendererStatus> get status => _status;
@@ -67,7 +74,14 @@ class WebViewRendererController implements RendererController {
 
   /// Evaluates JavaScript in the renderer page. Integration tests only.
   @visibleForTesting
-  Future<Object?> debugEvaluate(String source) async => _web?.evaluateJavascript(source: source);
+  Future<Object?> debugEvaluate(String source) async => _evaluate?.call(source);
+
+  /// Runs the page-loaded logic against [evaluate] instead of a live WebView.
+  @visibleForTesting
+  Future<void> debugHandlePageLoaded(JsEvaluator evaluate) {
+    _evaluate = evaluate;
+    return _onPageLoaded();
+  }
 
   /// Handler calls are served only for the renderer page's main frame.
   bool _acceptsCall(JavaScriptHandlerFunctionData data) =>
@@ -75,6 +89,7 @@ class WebViewRendererController implements RendererController {
 
   void _attach(InAppWebViewController web) {
     _web = web;
+    _evaluate = (source) => web.evaluateJavascript(source: source);
     web.addJavaScriptHandler(
       handlerName: 'headingsChanged',
       callback: (JavaScriptHandlerFunctionData data) {
@@ -128,10 +143,15 @@ class WebViewRendererController implements RendererController {
 
   Future<void> _onLoadStop(InAppWebViewController web, Uri? url) async {
     if (url != null && !_policy.allowNavigation(url)) return;
-    if (_status.value != RendererStatus.loading) return;
+    await _onPageLoaded();
+  }
+
+  Future<void> _onPageLoaded() async {
+    final evaluate = _evaluate;
+    if (evaluate == null || _status.value == RendererStatus.unavailable) return;
     Object? hasApi;
     try {
-      hasApi = await web.evaluateJavascript(source: "typeof window.mdv === 'object'");
+      hasApi = await evaluate("typeof window.mdv === 'object'");
     } catch (_) {
       hasApi = false;
     }
@@ -139,16 +159,25 @@ class WebViewRendererController implements RendererController {
       markUnavailable();
       return;
     }
-    _readyTimer?.cancel();
-    _status.value = RendererStatus.ready;
+    if (_status.value == RendererStatus.loading) {
+      _readyTimer?.cancel();
+      _status.value = RendererStatus.ready;
+    } else {
+      // Already ready: the page was reloaded (WebView2 accelerator keys, a
+      // restarted web content process) or the platform repeated the load
+      // event. A fresh page has an empty #content; replay the last render.
+      final shown = await _eval("document.getElementById('content').childNodes.length");
+      if (shown is num && shown > 0) return;
+      _pending ??= _last;
+    }
     await _flush();
   }
 
   Future<Object?> _eval(String source) async {
-    final web = _web;
-    if (web == null || _status.value != RendererStatus.ready) return null;
+    final evaluate = _evaluate;
+    if (evaluate == null || _status.value != RendererStatus.ready) return null;
     try {
-      return await web.evaluateJavascript(source: source);
+      return await evaluate(source);
     } catch (e) {
       debugPrint('Renderer call failed: $e');
       return null;
@@ -157,7 +186,7 @@ class WebViewRendererController implements RendererController {
 
   Future<void> _flush() async {
     final pending = _pending;
-    if (pending == null || _web == null || _status.value != RendererStatus.ready) return;
+    if (pending == null || _evaluate == null || _status.value != RendererStatus.ready) return;
     _pending = null;
     await _eval(jsCall('render', [pending.markdown, pending.options.toJson()]));
   }
@@ -165,6 +194,7 @@ class WebViewRendererController implements RendererController {
   @override
   Future<void> render(String markdown, RenderOptions options) async {
     _pending = (markdown: markdown, options: options);
+    _last = (markdown: markdown, options: options.withoutScrollRestore());
     await _flush();
   }
 
@@ -264,6 +294,8 @@ class _RendererViewState extends State<_RendererView> {
         mediaPlaybackRequiresUserGesture: true,
         javaScriptBridgeForMainFrameOnly: true,
         javaScriptBridgeOriginAllowList: bridgeOriginAllowList(controller._platform),
+        // WebView2: no Ctrl+R/F5 reload, DevTools, zoom or browser find/print keys.
+        browserAcceleratorKeysEnabled: false,
       ),
       onWebViewCreated: controller._attach,
       shouldOverrideUrlLoading: (web, action) async => controller._policy.allowNavigation(action.request.url)
@@ -272,6 +304,9 @@ class _RendererViewState extends State<_RendererView> {
       // Android does not route the initial load through shouldOverrideUrlLoading.
       onLoadStart: (web, url) => controller._policy.allowNavigation(url),
       onLoadStop: controller._onLoadStop,
+      // iOS/macOS/Windows: reloading starts a new web process; onLoadStop
+      // then replays the last render.
+      onWebContentProcessDidTerminate: (web) => unawaited(web.reload()),
       onReceivedError: (web, request, error) {
         if ((request.isForMainFrame ?? true) && controller._policy.isRendererLoad(request.url)) {
           controller.markUnavailable();

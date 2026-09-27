@@ -99,6 +99,12 @@ void main() {
     expect(await renderer.debugEvaluate('typeof window.mdv'), 'object');
     expect(renderer.status.value, RendererStatus.ready);
 
+    // A page reload (e.g. a restarted web process) re-renders the document.
+    final rendersBeforeReload = renders;
+    await renderer.debugEvaluate('window.location.reload(); null');
+    await pumpUntil(tester, () => renders > rendersBeforeReload, reason: 're-rendered after reload');
+    expect(await renderer.debugEvaluate("document.querySelectorAll('table').length"), 1);
+
     await renderer.debugEvaluate("document.querySelector('a[href=\"other.md\"]').click(); null");
     await pumpUntil(
       tester,
