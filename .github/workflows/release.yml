@@ -31,18 +31,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: windows, path: MDViewer-windows-x64.zip }
 
-  linux:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: scripts/install-linux-deps.sh
-      - uses: subosito/flutter-action@v2
-        with: { flutter-version: 3.47.0, channel: stable, cache: true }
-      - run: flutter build linux --release
-      - run: tar -czf MDViewer-linux-x64.tar.gz -C build/linux/x64/release/bundle .
-      - uses: actions/upload-artifact@v4
-        with: { name: linux, path: MDViewer-linux-x64.tar.gz }
-
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -71,7 +59,7 @@ jobs:
         with: { name: android, path: MDViewer-android.apk }
 
   publish:
-    needs: [macos, windows, linux, android]
+    needs: [macos, windows, android]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

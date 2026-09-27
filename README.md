@@ -1,6 +1,6 @@
 # MDViewer
 
-A free, open-source, **read-only** Markdown viewer for macOS, Windows, Linux, iOS and Android.
+A free, open-source, **read-only** Markdown viewer for macOS, Windows, iOS and Android. Linux support is planned (see below).
 
 MDViewer never modifies your documents. The only file it ever writes for you is a PDF you export with **Save as PDF** (macOS and Windows), and only to the location you choose.
 
@@ -20,9 +20,10 @@ Download the latest build from [Releases](../../releases).
 |---|---|---|
 | macOS | `MDViewer-macos.dmg` | Unsigned: the first time, right-click the app → Open. |
 | Windows | `MDViewer-windows-x64.zip` | Needs the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (preinstalled on Windows 11). |
-| Linux | `MDViewer-linux-x64.tar.gz` | Needs GTK 3 and WPE WebKit, e.g. `sudo apt install libgtk-3-0 libwpewebkit-1.1-0 libwpebackend-fdo-1.0-1` on Ubuntu 24.04. |
 | Android | `MDViewer-android.apk` | Allow installing from your browser/files app. |
 | iOS | — | Build from source with Xcode (no free distribution channel). |
+
+**Linux** is not part of v1. The document view needs WPE WebKit 2.0 on Linux, which Ubuntu no longer packages (it is available on Debian 13+); a build that works across distributions (for example a Flatpak that bundles WPE WebKit) is planned. The Linux runner code stays in the repository.
 
 ## Build from source
 
@@ -30,10 +31,8 @@ Requirements: Flutter 3.47+, and for the renderer only, Node 22+.
 
 ```bash
 flutter pub get
-flutter run -d macos   # or windows, linux, ios, android
+flutter run -d macos   # or windows, ios, android
 ```
-
-Linux builds need `scripts/install-linux-deps.sh` first.
 
 The document renderer is a small web bundle in `renderer/`, prebuilt into `assets/renderer/`. After changing anything in `renderer/`:
 
