@@ -3,6 +3,7 @@ import 'package:mdviewer/app_services.dart';
 import 'package:mdviewer/document/document_controller.dart';
 import 'package:mdviewer/open_actions.dart';
 import 'package:mdviewer/platform/document_access.dart';
+import 'package:mdviewer/platform/incoming_files.dart';
 import 'package:mdviewer/settings/recents.dart';
 import 'package:mdviewer/settings/settings.dart';
 import 'package:mdviewer/workspace/workspace.dart';
@@ -34,7 +35,7 @@ class TestHarness {
       );
 }
 
-Future<TestHarness> createHarness() async {
+Future<TestHarness> createHarness({IncomingFiles? incoming}) async {
   SharedPreferences.setMockInitialValues({});
   final source = MemoryFileSource()
     ..addText('/ws/README.md', '# Readme\n\nSee [guide](guide.md).')
@@ -53,6 +54,7 @@ Future<TestHarness> createHarness() async {
     renderer: renderer,
     document: document,
     actions: actions,
+    incoming: incoming,
   );
   return TestHarness(services: services, renderer: renderer, access: access, launcher: launcher, source: source);
 }

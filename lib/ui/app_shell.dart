@@ -35,6 +35,7 @@ class _AppShellState extends State<AppShell> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   AppLifecycleListener? _lifecycle;
   StreamSubscription<String>? _messages;
+  StreamSubscription<IncomingDocument>? _incoming;
   AppServices? _services;
   bool _sidebarVisible = true;
   bool _tocVisible = true;
@@ -54,11 +55,18 @@ class _AppShellState extends State<AppShell> {
     });
     _lifecycle?.dispose();
     _lifecycle = AppLifecycleListener(onResume: () => unawaited(services.document.checkForChanges()));
+    unawaited(_incoming?.cancel());
+    _incoming = services.incoming.documents.listen((document) => unawaited(services.actions.openIncoming(document)));
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final initial = await services.incoming.takeInitial();
+      if (initial.isNotEmpty) await services.actions.openIncoming(initial.first);
+    });
   }
 
   @override
   void dispose() {
     unawaited(_messages?.cancel());
+    unawaited(_incoming?.cancel());
     _lifecycle?.dispose();
     super.dispose();
   }

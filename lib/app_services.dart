@@ -4,6 +4,7 @@ import 'document/document_controller.dart';
 import 'document/external_launcher.dart';
 import 'open_actions.dart';
 import 'platform/document_access.dart';
+import 'platform/incoming_files.dart';
 import 'renderer/renderer_controller.dart';
 import 'renderer/webview_renderer.dart';
 import 'settings/recents.dart';
@@ -17,7 +18,8 @@ class AppServices {
     required this.renderer,
     required this.document,
     required this.actions,
-  });
+    IncomingFiles? incoming,
+  }) : incoming = incoming ?? IncomingFiles(useChannel: false);
 
   static Future<AppServices> create({List<String> args = const []}) async {
     final settings = await Settings.load();
@@ -25,7 +27,14 @@ class AppServices {
     final renderer = WebViewRendererController();
     final document = DocumentController(renderer: renderer, launcher: const UrlLauncherExternalLauncher());
     final actions = OpenActions(access: createDocumentAccess(), recents: recents, document: document);
-    return AppServices(settings: settings, recents: recents, renderer: renderer, document: document, actions: actions);
+    return AppServices(
+      settings: settings,
+      recents: recents,
+      renderer: renderer,
+      document: document,
+      actions: actions,
+      incoming: IncomingFiles(args: args),
+    );
   }
 
   final Settings settings;
@@ -33,8 +42,10 @@ class AppServices {
   final RendererController renderer;
   final DocumentController document;
   final OpenActions actions;
+  final IncomingFiles incoming;
 
   void dispose() {
+    incoming.dispose();
     document.dispose();
     renderer.dispose();
     settings.dispose();

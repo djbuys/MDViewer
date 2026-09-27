@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mdviewer/app.dart';
+import 'package:mdviewer/platform/incoming_files.dart';
 import 'package:mdviewer/renderer/renderer_controller.dart';
 import 'package:mdviewer/search/find_bar.dart';
 import 'package:mdviewer/settings/settings.dart';
@@ -121,5 +122,12 @@ void main() {
     h.renderer.emitLink('javascript:alert(1)');
     await tester.pumpAndSettle();
     expect(find.textContaining('Unsupported link'), findsOneWidget);
+  });
+
+  testWidgets('launch arguments open on startup', (tester) async {
+    final harness = await createHarness(incoming: IncomingFiles(args: ['/ws'], useChannel: false));
+    harness.access.incoming['/ws'] = harness.folderRequest();
+    await pumpApp(tester, const Size(1280, 800), harness: harness);
+    expect(harness.services.document.currentPath, '/ws/README.md');
   });
 }
