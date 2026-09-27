@@ -1,6 +1,7 @@
 package io.github.djbuys.mdviewer
 
 import android.app.Activity
+import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
 import android.os.Handler
@@ -50,6 +51,12 @@ class DocumentsChannel(private val activity: Activity, messenger: BinaryMessenge
         if (intent?.action != Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
         intent.action = null // handle once, even if the activity is recreated
+        // Only content: URIs. A file: URI (even in an explicit intent, which
+        // bypasses the manifest filter) could make MDViewer show its own private files.
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT) {
+            Log.w("MDViewer", "Ignoring VIEW intent with non-content URI scheme ${uri.scheme}")
+            return
+        }
         background(
             { copyToCache(uri) },
             { path ->

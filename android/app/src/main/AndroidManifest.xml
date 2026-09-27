@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Remote https: images in documents (the WebView page itself is local). -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="MDViewer"
         android:name="${applicationName}"
@@ -27,8 +29,9 @@
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <!-- content: only. A file: scheme would let other apps make
+                     MDViewer display its own private files. -->
                 <data android:scheme="content" />
-                <data android:scheme="file" />
                 <data android:mimeType="text/markdown" />
                 <data android:mimeType="text/x-markdown" />
                 <data android:mimeType="text/plain" />
