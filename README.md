@@ -51,6 +51,8 @@ cd renderer && npm test                        # renderer tests
 
 See [docs/superpowers/specs/2026-09-27-mdviewer-design.md](docs/superpowers/specs/2026-09-27-mdviewer-design.md).
 
+Security: the WebView may only show the bundled renderer page (the exact URL it first loaded), and only that page's main frame can reach the app; documents are sanitized, every link is routed through the app, symbolic links cannot reach files outside the opened folder, and links to executables are never launched.
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).
