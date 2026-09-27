@@ -46,11 +46,22 @@ const Set<String> blockedExecutableExtensions = {
 
 bool isBlockedExecutable(String path) => blockedExecutableExtensions.contains(p.extension(path).toLowerCase());
 
-/// Decides whether a linked file may be handed to the OS to open.
+/// Directory "bundles" that macOS runs or loads as code (apps, plug-ins,
+/// extensions); opening one could execute it.
+const Set<String> blockedBundleExtensions = {
+  '.app', '.workflow', '.action', '.prefpane', '.saver', '.bundle', '.plugin', '.kext', '.qlgenerator',
+  '.mdimporter', '.appex', '.xpc', '.framework', '.component', '.osax', '.service', '.wdgt',
+};
+
+/// Decides whether a linked file or folder may be handed to the OS to open.
 ///
 /// Always refuses [blockedExecutableExtensions]. With [posixChecks] (macOS
-/// and Linux, where any file can be made executable) it also refuses files
-/// without an extension and files with any execute permission bit set.
+/// and Linux, where any file can be made executable):
+/// - folders are allowed (they open in the file manager), except bundle
+///   folders ([blockedBundleExtensions]);
+/// - files are refused if any execute permission bit is set. Extensionless
+///   files without one (LICENSE, Makefile) are fine: LaunchServices and
+///   xdg-open do not execute them.
 class LaunchPolicy {
   const LaunchPolicy({required this.posixChecks});
 
@@ -64,10 +75,13 @@ class LaunchPolicy {
   Future<bool> blocks(String path) async {
     if (isBlockedExecutable(path)) return true;
     if (!posixChecks) return false;
-    if (p.extension(path).isEmpty) return true;
     try {
       final stat = await File(path).stat();
-      return stat.type != FileSystemEntityType.notFound && stat.mode & _anyExecuteBit != 0;
+      return switch (stat.type) {
+        FileSystemEntityType.notFound => false,
+        FileSystemEntityType.directory => blockedBundleExtensions.contains(p.extension(path).toLowerCase()),
+        _ => stat.mode & _anyExecuteBit != 0,
+      };
     } catch (_) {
       return true;
     }

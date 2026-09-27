@@ -219,36 +219,67 @@ void main() {
   });
 
   group('launch policy', () {
-    test('on macOS/Linux, files without an extension are refused', () async {
-      const posix = LaunchPolicy(posixChecks: true);
-      expect(await posix.blocks('/x/Makefile'), isTrue);
-      expect(await posix.blocks('/x/.profile'), isTrue);
-      expect(await posix.blocks('/x/notes.txt'), isFalse);
-      expect(await posix.blocks('/x/run.sh'), isTrue);
-      const other = LaunchPolicy(posixChecks: false);
-      expect(await other.blocks('/x/Makefile'), isFalse);
-      expect(await other.blocks('/x/run.sh'), isTrue);
+    // A real folder: README.md, LICENSE (no extension, not executable),
+    // install (no extension, executable), run.txt (executable), docs/,
+    // Tool.app/ and Helper.prefpane/ (bundle directories).
+    late Directory dir;
+    late String ws;
+
+    setUp(() async {
+      dir = await Directory.systemTemp.createTemp('mdv_launch');
+      ws = await dir.resolveSymbolicLinks();
+      File(p.join(ws, 'README.md')).writeAsStringSync('# Readme');
+      File(p.join(ws, 'LICENSE')).writeAsStringSync('MIT');
+      File(p.join(ws, 'install')).writeAsStringSync('#!/bin/sh');
+      File(p.join(ws, 'run.txt')).writeAsStringSync('#!/bin/sh');
+      File(p.join(ws, 'group.txt')).writeAsStringSync('x');
+      Directory(p.join(ws, 'docs')).createSync();
+      File(p.join(ws, 'docs', 'a.txt')).writeAsStringSync('a');
+      Directory(p.join(ws, 'Tool.app', 'Contents')).createSync(recursive: true);
+      Directory(p.join(ws, 'Helper.prefpane', 'Contents')).createSync(recursive: true);
+      if (!Platform.isWindows) {
+        for (final (mode, name) in [('u+x', 'install'), ('u+x', 'run.txt'), ('g+x', 'group.txt')]) {
+          expect((await Process.run('chmod', [mode, p.join(ws, name)])).exitCode, 0);
+        }
+      }
     });
 
-    test('on macOS/Linux, files with any execute bit are refused', () async {
-      final dir = await Directory.systemTemp.createTemp('mdv_exec');
-      addTearDown(() => dir.delete(recursive: true));
-      final plain = File(p.join(dir.path, 'notes.txt'))..writeAsStringSync('text');
-      final script = File(p.join(dir.path, 'innocent.txt'))..writeAsStringSync('#!/bin/sh\necho hi');
-      final groupOnly = File(p.join(dir.path, 'group.txt'))..writeAsStringSync('x');
-      expect((await Process.run('chmod', ['u+x', script.path])).exitCode, 0);
-      expect((await Process.run('chmod', ['g+x', groupOnly.path])).exitCode, 0);
+    tearDown(() => dir.delete(recursive: true));
+
+    test('extensionless files without an execute bit and folders are allowed', () async {
       const posix = LaunchPolicy(posixChecks: true);
-      expect(await posix.blocks(plain.path), isFalse);
-      expect(await posix.blocks(script.path), isTrue);
-      expect(await posix.blocks(groupOnly.path), isTrue);
+      expect(await posix.blocks(p.join(ws, 'LICENSE')), isFalse);
+      expect(await posix.blocks(p.join(ws, 'docs')), isFalse);
+      expect(await posix.blocks(p.join(ws, 'docs', 'a.txt')), isFalse);
+    }, skip: Platform.isWindows);
+
+    test('files with any execute bit are refused on macOS/Linux', () async {
+      const posix = LaunchPolicy(posixChecks: true);
+      expect(await posix.blocks(p.join(ws, 'install')), isTrue);
+      expect(await posix.blocks(p.join(ws, 'run.txt')), isTrue);
+      expect(await posix.blocks(p.join(ws, 'group.txt')), isTrue);
+      const other = LaunchPolicy(posixChecks: false);
+      expect(await other.blocks(p.join(ws, 'install')), isFalse);
+    }, skip: Platform.isWindows);
+
+    test('bundle directories (apps, plug-ins, extensions) are refused', () async {
+      const posix = LaunchPolicy(posixChecks: true);
+      expect(await posix.blocks(p.join(ws, 'Tool.app')), isTrue);
+      expect(await posix.blocks(p.join(ws, 'Helper.prefpane')), isTrue);
+      for (final ext in [
+        '.app', '.workflow', '.action', '.prefpane', '.saver', '.bundle', '.plugin', '.kext', '.qlgenerator', //
+        '.mdimporter', '.appex', '.xpc', '.framework', '.component', '.osax', '.service', '.wdgt',
+      ]) {
+        final bundle = Directory(p.join(ws, 'B$ext'))..createSync();
+        expect(await posix.blocks(bundle.path), isTrue, reason: ext);
+      }
     }, skip: Platform.isWindows);
 
     test('the host policy does the POSIX checks on macOS and Linux only', () {
       expect(LaunchPolicy.forHost().posixChecks, Platform.isMacOS || Platform.isLinux);
     });
 
-    test('links to extensionless files are blocked with the POSIX policy', () async {
+    test('document links: folders and LICENSE open; executables and bundles are refused', () async {
       final strict = DocumentController(
         renderer: renderer,
         launcher: launcher,
@@ -256,16 +287,20 @@ void main() {
         launchPolicy: const LaunchPolicy(posixChecks: true),
       );
       addTearDown(strict.dispose);
-      source.addText('/ws/tools/install', '#!/bin/sh');
-      await strict.openWorkspace(workspace);
+      await strict.openWorkspace(Workspace.folder(source: IoFileSource(supportsWatch: false), root: ws));
       final messages = <String>[];
       strict.messages.listen(messages.add);
-      await strict.handleLink('tools/install');
-      await strict.handleLink('docs/notes.txt');
+      for (final href in ['docs/', 'LICENSE', 'install', 'Tool.app', 'Helper.prefpane/']) {
+        await strict.handleLink(href);
+      }
       await settle();
-      expect(launcher.opened, ['/ws/docs/notes.txt']);
-      expect(messages, ['Opening install is blocked for safety']);
-    });
+      expect(launcher.opened.map((path) => p.relative(path, from: ws)), ['docs', 'LICENSE']);
+      expect(messages, [
+        'Opening install is blocked for safety',
+        'Opening Tool.app is blocked for safety',
+        'Opening Helper.prefpane is blocked for safety',
+      ]);
+    }, skip: Platform.isWindows);
   });
 
   test('unsupported links report a message', () async {
